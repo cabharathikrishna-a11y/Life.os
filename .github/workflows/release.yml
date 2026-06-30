@@ -32,6 +32,10 @@ jobs:
     - name: Grant Execute Permission for Gradle
       run: chmod +x gradlew
 
+    - name: Decode Keystore
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > debug.keystore
+
     # We pass the cloud build number directly into the compilation step automatically
     - name: Compile Automated Release APK
       run: ./gradlew assembleRelease -PversionCode=${{ github.run_number }} -PversionName="1.0.${{ github.run_number }}"
