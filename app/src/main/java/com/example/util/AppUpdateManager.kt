@@ -34,6 +34,7 @@ import java.util.zip.ZipFile
 sealed class UpdateStatus {
     object Idle : UpdateStatus()
     object Checking : UpdateStatus()
+    object SecuringData : UpdateStatus()
     data class NewVersionAvailable(val versionId: Int, val currentVersionCode: Int, val apkFileId: String?) : UpdateStatus()
     data class NoUpdateAvailable(val cloudVersion: Int, val localVersion: Int) : UpdateStatus()
     data class Downloading(val progress: Float) : UpdateStatus()
@@ -113,6 +114,41 @@ object AppUpdateManager {
     fun setPauseUpdatesEnabled(context: Context, enabled: Boolean) {
         val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("pref_pause_updates", enabled).apply()
+    }
+
+    fun getGithubOwner(context: Context): String {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        return prefs.getString("pref_github_owner", "cabharathikrishna") ?: "cabharathikrishna"
+    }
+
+    fun setGithubOwner(context: Context, owner: String) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("pref_github_owner", owner).apply()
+    }
+
+    fun getGithubRepo(context: Context): String {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        return prefs.getString("pref_github_repo", "Life.os") ?: "Life.os"
+    }
+
+    fun setGithubRepo(context: Context, repo: String) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("pref_github_repo", repo).apply()
+    }
+
+    fun getPendingUpdateVersion(context: Context): Int {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        return prefs.getInt("pref_pending_update_version_code", -1)
+    }
+
+    fun setPendingUpdateVersion(context: Context, versionCode: Int) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putInt("pref_pending_update_version_code", versionCode).apply()
+    }
+
+    fun clearPendingUpdateVersion(context: Context) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        prefs.edit().remove("pref_pending_update_version_code").apply()
     }
 
     /**
@@ -226,17 +262,77 @@ object AppUpdateManager {
                     }
                 }
 
-                Log.d(TAG, "Current Code: $currentCode, Firebase Target Code: $targetVersionCode")
+                // 2. Fetch update config from GitHub Releases
+                var githubVersionCode = -1
+                var githubApkUrl: String? = null
+                val githubOwner = getGithubOwner(context)
+                val githubRepo = getGithubRepo(context)
+                val githubUrl = "https://api.github.com/repos/$githubOwner/$githubRepo/releases/latest"
+                val githubRequest = Request.Builder()
+                    .url(githubUrl)
+                    .header("User-Agent", "Life-OS-Android-App")
+                    .get()
+                    .build()
+                
+                try {
+                    client.newCall(githubRequest).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body?.string()
+                            if (!body.isNullOrBlank()) {
+                                val json = JSONObject(body)
+                                val tag = json.optString("tag_name", "")
+                                val buildNum = tag.substringAfterLast(".").toIntOrNull() 
+                                    ?: Regex("""\d+""").findAll(tag).lastOrNull()?.value?.toIntOrNull()
+                                if (buildNum != null) {
+                                    githubVersionCode = buildNum
+                                    val assets = json.optJSONArray("assets")
+                                    if (assets != null) {
+                                        for (i in 0 until assets.length()) {
+                                            val asset = assets.getJSONObject(i)
+                                            val assetName = asset.optString("name", "")
+                                            if (assetName.endsWith(".apk")) {
+                                                githubApkUrl = asset.optString("browser_download_url", "")
+                                                break
+                                            }
+                                        }
+                                    }
+                                    Log.d(TAG, "GitHub latest release check: Version Code $githubVersionCode, APK URL: $githubApkUrl")
+                                } else {
+                                    errorLogs.add("Could not parse version code from GitHub tag: $tag")
+                                }
+                            } else {
+                                errorLogs.add("Empty response body from GitHub API")
+                            }
+                        } else {
+                            errorLogs.add("GitHub API HTTP ${response.code} ${response.message}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to fetch from GitHub API", e)
+                    errorLogs.add("GitHub API error: ${e.localizedMessage ?: e.toString()}")
+                }
 
-                if (targetVersionCode > currentCode) {
+                var finalTargetVersionCode = targetVersionCode
+                var finalApkFileId = apkFileId
+
+                if (githubVersionCode > finalTargetVersionCode) {
+                    finalTargetVersionCode = githubVersionCode
+                    finalApkFileId = githubApkUrl
+                }
+
+                Log.d(TAG, "Current Code: $currentCode, Firebase Target Code: $targetVersionCode, GitHub Target Code: $githubVersionCode, Chosen Target Code: $finalTargetVersionCode")
+
+                if (finalTargetVersionCode > currentCode) {
+                    setPendingUpdateVersion(context, finalTargetVersionCode)
                     _updateStatus.value = UpdateStatus.NewVersionAvailable(
-                        versionId = targetVersionCode,
+                        versionId = finalTargetVersionCode,
                         currentVersionCode = currentCode,
-                        apkFileId = apkFileId
+                        apkFileId = finalApkFileId
                     )
-                } else if (targetVersionCode >= 0) {
+                } else if (finalTargetVersionCode >= 0) {
+                    clearPendingUpdateVersion(context)
                     _updateStatus.value = UpdateStatus.NoUpdateAvailable(
-                        cloudVersion = targetVersionCode,
+                        cloudVersion = finalTargetVersionCode,
                         localVersion = currentCode
                     )
                     if (!manualCheck) {
@@ -244,11 +340,12 @@ object AppUpdateManager {
                         _updateStatus.value = UpdateStatus.Idle
                     }
                 } else {
-                    // Both requests failed to get a valid version code (i.e. targetVersionCode remains -1)
+                    // All requests failed to get a valid version code
                     if (errorLogs.isNotEmpty()) {
-                        val errorMsg = "Could not fetch updates from Firebase:\n" + errorLogs.joinToString("\n")
+                        val errorMsg = "Could not fetch updates from Firebase/GitHub:\n" + errorLogs.joinToString("\n")
                         _updateStatus.value = UpdateStatus.Error(errorMsg)
                     } else {
+                        clearPendingUpdateVersion(context)
                         _updateStatus.value = UpdateStatus.NoUpdateAvailable(
                             cloudVersion = -1,
                             localVersion = currentCode
@@ -365,8 +462,7 @@ object AppUpdateManager {
      * Downloads and installs the update.
      */
     suspend fun downloadAndInstallUpdate(context: Context, providedFileId: String?) {
-        _updateStatus.value = UpdateStatus.Downloading(0f)
-        showProgressNotification(context, 0f)
+        _updateStatus.value = UpdateStatus.SecuringData
 
         withContext(Dispatchers.IO) {
             try {
@@ -383,6 +479,10 @@ object AppUpdateManager {
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to perform automatic pre-update backup", e)
                 }
+
+                // Switch to downloading state now that data is safe
+                _updateStatus.value = UpdateStatus.Downloading(0f)
+                showProgressNotification(context, 0f)
 
                 // 1. Check Network Connectivity
                 if (!isNetworkAvailable(context)) {
@@ -614,45 +714,58 @@ object AppUpdateManager {
      * Triggers the Android package installer for the downloaded APK.
      */
     fun installApk(context: Context, apkFile: File) {
-        try {
-            if (!apkFile.exists() || apkFile.length() == 0L || !isValidApk(apkFile)) {
-                Log.e(TAG, "APK file is missing, empty, or corrupted")
-                _updateStatus.value = UpdateStatus.Error("The update installation failed: The APK file is missing or corrupted. Please try downloading again.")
-                return
-            }
-
-            // Check if we need to request "unknown sources" permission on Android Oreo+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.packageManager.canRequestPackageInstalls()) {
-                    Log.w(TAG, "Requesting MANAGE_UNKNOWN_APP_SOURCES permission")
-                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                    _updateStatus.value = UpdateStatus.Error("Please enable 'Install unknown apps' permission for Life OS and try again. Your local app data is fully secured.")
-                    return
+        updateScope.launch {
+            try {
+                if (!apkFile.exists() || apkFile.length() == 0L || !isValidApk(apkFile)) {
+                    Log.e(TAG, "APK file is missing, empty, or corrupted")
+                    _updateStatus.value = UpdateStatus.Error("The update installation failed: The APK file is missing or corrupted. Please try downloading again.")
+                    return@launch
                 }
+
+                // Secure user data one last time before initiating installation
+                withContext(Dispatchers.IO) {
+                    try {
+                        Log.i(TAG, "Securing user data immediately prior to package installation...")
+                        val db = com.example.data.AppDatabase.getInstance(context)
+                        com.example.util.DatabaseBackupHelper.autoBackup(context, db)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Pre-installation database auto-backup failed", e)
+                    }
+                }
+
+                // Check if we need to request "unknown sources" permission on Android Oreo+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (!context.packageManager.canRequestPackageInstalls()) {
+                        Log.w(TAG, "Requesting MANAGE_UNKNOWN_APP_SOURCES permission")
+                        val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                        _updateStatus.value = UpdateStatus.Error("Please enable 'Install unknown apps' permission for Life OS and try again. Your local app data is fully secured.")
+                        return@launch
+                    }
+                }
+
+                // Obtain File URI using our com.example.fileprovider
+                val authority = "com.example.fileprovider"
+                val apkUri = FileProvider.getUriForFile(context, authority, apkFile)
+
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(apkUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+
+                Log.i(TAG, "Launching package installer for URI: $apkUri")
+                context.startActivity(intent)
+                
+                // Set state back to idle so they can click download again if installation fails or is cancelled
+                _updateStatus.value = UpdateStatus.ReadyToInstall(apkFile)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch package installer", e)
+                _updateStatus.value = UpdateStatus.Error("Failed to launch package installer: ${e.localizedMessage}. This can occur if the APK signature is incompatible or permissions are restricted. Try downloading the APK and installing manually. Your app data is fully secured.")
             }
-
-            // Obtain File URI using our com.example.fileprovider
-            val authority = "com.example.fileprovider"
-            val apkUri = FileProvider.getUriForFile(context, authority, apkFile)
-
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(apkUri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-
-            Log.i(TAG, "Launching package installer for URI: $apkUri")
-            context.startActivity(intent)
-            
-            // Set state back to idle so they can click download again if installation fails or is cancelled
-            _updateStatus.value = UpdateStatus.ReadyToInstall(apkFile)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch package installer", e)
-            _updateStatus.value = UpdateStatus.Error("Failed to launch package installer: ${e.localizedMessage}. This can occur if the APK signature is incompatible or permissions are restricted. Try downloading the APK and installing manually. Your app data is fully secured.")
         }
     }
 

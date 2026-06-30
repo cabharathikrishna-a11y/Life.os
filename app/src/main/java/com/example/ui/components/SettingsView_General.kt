@@ -444,6 +444,24 @@ fun SettingsGeneralSystemPage(
                                 }
                             }
                         }
+                        is com.example.util.UpdateStatus.SecuringData -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = WaterBlue,
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "🔒 Securing local databases & settings...",
+                                    color = WaterBlue,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                         is com.example.util.UpdateStatus.Downloading -> {
                             Column {
                                 Text(
@@ -546,6 +564,68 @@ fun SettingsGeneralSystemPage(
                                 }
                             }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = Color(0xFF222225), thickness = 1.dp)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "GITHUB RELEASE SOURCE",
+                        color = Color.LightGray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    var githubOwnerInput by remember { mutableStateOf(com.example.util.AppUpdateManager.getGithubOwner(context)) }
+                    var githubRepoInput by remember { mutableStateOf(com.example.util.AppUpdateManager.getGithubRepo(context)) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = githubOwnerInput,
+                            onValueChange = { 
+                                githubOwnerInput = it
+                                com.example.util.AppUpdateManager.setGithubOwner(context, it)
+                            },
+                            label = { Text("GitHub Owner", color = Color.Gray, fontSize = 10.sp) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WaterBlue,
+                                unfocusedBorderColor = Color(0xFF222222),
+                                focusedContainerColor = Color(0xFF070707),
+                                unfocusedContainerColor = Color(0xFF070707),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f).height(54.dp),
+                            textStyle = TextStyle(fontSize = 11.sp)
+                        )
+
+                        OutlinedTextField(
+                            value = githubRepoInput,
+                            onValueChange = { 
+                                githubRepoInput = it
+                                com.example.util.AppUpdateManager.setGithubRepo(context, it)
+                            },
+                            label = { Text("Repository Name", color = Color.Gray, fontSize = 10.sp) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WaterBlue,
+                                unfocusedBorderColor = Color(0xFF222222),
+                                focusedContainerColor = Color(0xFF070707),
+                                unfocusedContainerColor = Color(0xFF070707),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f).height(54.dp),
+                            textStyle = TextStyle(fontSize = 11.sp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))

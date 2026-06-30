@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Trigger background system auto-update check on startup and loop every hour (3,600,000 ms)
+            // Trigger background system auto-update check on startup and loop keenly every 15 minutes (900,000 ms)
             lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 while (true) {
                     try {
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         android.util.Log.e("MainActivity", "System auto-update check failed", e)
                     }
-                    kotlinx.coroutines.delay(3600000L)
+                    kotlinx.coroutines.delay(900000L)
                 }
             }
 
@@ -161,6 +161,14 @@ class MainActivity : ComponentActivity() {
 
                 val hasActiveTimerOrUnsavedSession = isTimerRunning || isStopwatchActive || showVerificationDialog || pendingFocusReview != null
 
+                val pendingUpdateVersion = remember(updateStatus) {
+                    com.example.util.AppUpdateManager.getPendingUpdateVersion(context)
+                }
+                val currentVersionCode = remember {
+                    com.example.util.AppUpdateManager.getCurrentVersionCode(context)
+                }
+                val isUpdatePending = pendingUpdateVersion > currentVersionCode
+
                 // On startup, if a new version is detected, automatically download it if auto-update is enabled
                 LaunchedEffect(updateStatus) {
                     val status = updateStatus
@@ -176,6 +184,32 @@ class MainActivity : ComponentActivity() {
 
                 // Render update state dialogs
                 when (val status = updateStatus) {
+                    is com.example.util.UpdateStatus.SecuringData -> {
+                        AlertDialog(
+                            onDismissRequest = {},
+                            title = {
+                                Text("Securing App Data...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            },
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(color = WaterBlue, modifier = Modifier.size(24.dp))
+                                    Text(
+                                        "Please wait. We are automatically securing and backing up your local database and settings before starting the system update...",
+                                        fontSize = 13.sp,
+                                        color = Color.LightGray
+                                    )
+                                }
+                            },
+                            confirmButton = {},
+                            dismissButton = {},
+                            containerColor = Color(0xFF0F0F11),
+                            textContentColor = Color.White,
+                            titleContentColor = Color.White
+                        )
+                    }
                     is com.example.util.UpdateStatus.Downloading -> {
                         // Downloading is completely silent in-app, progress is updated in status bar notification
                     }
@@ -422,6 +456,60 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .padding(innerPadding)
                         ) {
+                            if (isUpdatePending && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(WaterBlue.copy(alpha = 0.12f))
+                                        .border(width = 1.dp, color = WaterBlue.copy(alpha = 0.4f), shape = RoundedCornerShape(12.dp))
+                                        .bouncyClick {
+                                            com.example.util.AppUpdateManager.triggerCheckForUpdates(context, manualCheck = true)
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "System Update Pending",
+                                            tint = WaterBlue,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "System Update v$pendingUpdateVersion is Pending",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "Tap here to secure your data and install the update now.",
+                                                color = Color.LightGray,
+                                                fontSize = 9.sp
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(WaterBlue)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "INSTALL",
+                                                color = Color.Black,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             // Render screen container with premium fluid transition animations
                             Box(modifier = Modifier.fillMaxSize().background(Color.Transparent)) {
                                 AnimatedContent(
@@ -1236,6 +1324,18 @@ class MainActivity : ComponentActivity() {
         FocusTimerManager.setAppBackgroundedState(this, false)
         if (!com.example.util.AppLockHelper.isAppLockEnabled(this)) {
             isAppUnlockedState.value = true
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Keenly check for updates whenever the user opens/resumes the app
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                com.example.util.AppUpdateManager.checkForUpdates(applicationContext, manualCheck = false)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "onResume auto-update check failed", e)
+            }
         }
     }
 
