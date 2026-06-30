@@ -810,7 +810,9 @@ class KeepAliveService : Service() {
                 val cumSecs = FocusTimerManager.cumulativeSessionFocusSeconds.value
                 val swSecs = FocusTimerManager.stopwatchSeconds.value
                 if (cumSecs > 0) cumSecs else if (swSecs > 0) swSecs else 0
-            } else 0
+            } else {
+                (FocusTimerManager.accumulatedSessionTimeMs.value / 1000).toInt()
+            }
             val myTodaySeconds = completedTodaySecs + pendingSecs + runningSecs
             
             val meRemote = users[currentUsername]

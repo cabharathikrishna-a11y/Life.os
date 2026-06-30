@@ -155,6 +155,13 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                         ) { activePage = 17 }
                         HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp, end = 16.dp))
                         SettingsRowItem(
+                            title = "SYSTEM UPDATE CENTER",
+                            subtitle = "Check for updates, manage background downloads, authenticate tester",
+                            icon = Icons.Default.Refresh,
+                            iconBgColor = Color(0xFF4CAF50)
+                        ) { activePage = 16 }
+                        HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp, end = 16.dp))
+                        SettingsRowItem(
                             title = "2. DEEPA AI BRAIN",
                             subtitle = "Offline model caching, memories vault management",
                             icon = Icons.Default.Face,
@@ -413,7 +420,12 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
             )
         }
         
-
+        16 -> {
+            SettingsUpdatesPage(
+                viewModel = viewModel,
+                onBack = { activePage = 0 }
+            )
+        }
 
         17 -> {
             SettingsBackgroundDiagnosticsPage(

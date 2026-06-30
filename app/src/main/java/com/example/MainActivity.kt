@@ -90,18 +90,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Trigger background system auto-update check on startup and loop keenly every 15 minutes (900,000 ms)
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                while (true) {
-                    try {
-                        com.example.util.AppUpdateManager.checkForUpdates(applicationContext, manualCheck = false)
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "System auto-update check failed", e)
-                    }
-                    kotlinx.coroutines.delay(900000L)
-                }
-            }
-
             // Request Notification Permission on Android 13+ (API 33)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                 val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -149,171 +137,68 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
-                // Global auto-update engine collection and overlay overlays
-                val updateStatus by com.example.util.AppUpdateManager.updateStatus.collectAsState()
                 val context = androidx.compose.ui.platform.LocalContext.current
-
-                // Observe focus timer and stopwatch active states to delay update alerts
-                val isTimerRunning by com.example.util.FocusTimerManager.isTimerRunning.collectAsState()
-                val isStopwatchActive by com.example.util.FocusTimerManager.isStopwatchActive.collectAsState()
-                val showVerificationDialog by com.example.util.FocusTimerManager.showGlobalVerificationDialog.collectAsState()
-                val pendingFocusReview by com.example.util.FocusTimerManager.pendingFocusReview.collectAsState()
-
-                val hasActiveTimerOrUnsavedSession = isTimerRunning || isStopwatchActive || showVerificationDialog || pendingFocusReview != null
-
-                val pendingUpdateVersion = remember(updateStatus) {
-                    com.example.util.AppUpdateManager.getPendingUpdateVersion(context)
+                
+                // On-startup check for downloaded APK and silent background checking
+                val readyApkPath = remember { com.example.util.AppUpdateManager.getReadyApkPath(context) }
+                var showStartupUpdateDialog by remember {
+                    mutableStateOf(
+                        readyApkPath?.let { path ->
+                            val file = java.io.File(path)
+                            file.exists() && file.length() > 0 && com.example.util.AppUpdateManager.isValidApk(file)
+                        } ?: false
+                    )
                 }
-                val currentVersionCode = remember {
-                    com.example.util.AppUpdateManager.getCurrentVersionCode(context)
-                }
-                val isUpdatePending = pendingUpdateVersion > currentVersionCode
 
-                // On startup, if a new version is detected, automatically download it if auto-update is enabled
-                LaunchedEffect(updateStatus) {
-                    val status = updateStatus
-                    if (status is com.example.util.UpdateStatus.NewVersionAvailable) {
-                        val isAuto = com.example.util.AppUpdateManager.isAutoUpdateEnabled(context)
-                        val isForce = com.example.util.AppUpdateManager.isForceUpdateEnabled(context)
-                        if (isAuto || isForce) {
-                            val verId = status.apkFileId
-                            com.example.util.AppUpdateManager.startDownloadAndInstall(context, verId)
-                        }
+                LaunchedEffect(Unit) {
+                    if (!com.example.util.AppUpdateManager.isPauseUpdatesEnabled(context)) {
+                        com.example.util.AppUpdateManager.checkForUpdates(context, manualCheck = false)
                     }
                 }
 
-                // Render update state dialogs
-                when (val status = updateStatus) {
-                    is com.example.util.UpdateStatus.SecuringData -> {
-                        AlertDialog(
-                            onDismissRequest = {},
-                            title = {
-                                Text("Securing App Data...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            },
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    CircularProgressIndicator(color = WaterBlue, modifier = Modifier.size(24.dp))
-                                    Text(
-                                        "Please wait. We are automatically securing and backing up your local database and settings before starting the system update...",
-                                        fontSize = 13.sp,
-                                        color = Color.LightGray
-                                    )
-                                }
-                            },
-                            confirmButton = {},
-                            dismissButton = {},
-                            containerColor = Color(0xFF0F0F11),
-                            textContentColor = Color.White,
-                            titleContentColor = Color.White
-                        )
-                    }
-                    is com.example.util.UpdateStatus.Downloading -> {
-                        // Downloading is completely silent in-app, progress is updated in status bar notification
-                    }
-                    is com.example.util.UpdateStatus.ReadyToInstall -> {
-                        if (!hasActiveTimerOrUnsavedSession) {
-                            AlertDialog(
-                                onDismissRequest = {},
-                                title = {
-                                    Text("System Update Downloaded", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                },
-                                text = {
-                                    Text(
-                                        "The updated APK was successfully downloaded. Please tap 'Install' below to complete the system update.",
-                                        fontSize = 13.sp,
-                                        color = Color.LightGray
-                                    )
-                                },
-                                confirmButton = {
-                                    Button(
-                                        onClick = { com.example.util.AppUpdateManager.installApk(context, status.apkFile) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = WaterBlue, contentColor = Color.Black)
-                                    ) {
-                                        Text("INSTALL", fontWeight = FontWeight.Bold)
-                                    }
-                                },
-                                dismissButton = {
-                                    if (!com.example.util.AppUpdateManager.isForceUpdateEnabled(context)) {
-                                        TextButton(
-                                            onClick = { com.example.util.AppUpdateManager.resetStatus() }
-                                        ) {
-                                            Text("CANCEL", color = Color.Gray)
-                                        }
-                                    }
-                                },
-                                containerColor = Color(0xFF0F0F11),
-                                textContentColor = Color.White,
-                                titleContentColor = Color.White
-                            )
-                        }
-                    }
-                    is com.example.util.UpdateStatus.NewVersionAvailable -> {
-                        AlertDialog(
-                            onDismissRequest = {
-                                if (!com.example.util.AppUpdateManager.isForceUpdateEnabled(context)) {
-                                    com.example.util.AppUpdateManager.resetStatus()
-                                }
-                            },
-                            title = {
-                                Text("System Update Available", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            },
-                            text = {
-                                Text(
-                                    "A new system update (Version Code: #${status.versionId}) is available. Would you like to download and install it now?\n\n(Current version: #${status.currentVersionCode})",
-                                    fontSize = 13.sp,
-                                    color = Color.LightGray
+                if (showStartupUpdateDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showStartupUpdateDialog = false },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Update ready icon",
+                                    tint = com.example.ui.theme.WaterBlue,
+                                    modifier = Modifier.size(24.dp)
                                 )
-                            },
-                            confirmButton = {
-                                Button(
-                                    onClick = {
-                                        com.example.util.AppUpdateManager.startDownloadAndInstall(context, status.apkFileId)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = WaterBlue, contentColor = Color.Black)
-                                ) {
-                                    Text("DOWNLOAD", fontWeight = FontWeight.Bold)
-                                }
-                            },
-                            dismissButton = {
-                                if (!com.example.util.AppUpdateManager.isForceUpdateEnabled(context)) {
-                                    TextButton(
-                                        onClick = { com.example.util.AppUpdateManager.resetStatus() }
-                                    ) {
-                                        Text("CANCEL", color = Color.Gray)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("System Update Ready", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+                            }
+                        },
+                        text = {
+                            Text(
+                                "A new Life OS update is downloaded and ready to install. Your local database and settings will be securely backed up prior to the installation to guarantee zero data loss. Proceed with the update now?",
+                                color = Color.LightGray,
+                                fontSize = 13.sp
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showStartupUpdateDialog = false
+                                    readyApkPath?.let { path ->
+                                        com.example.util.AppUpdateManager.installApk(context, java.io.File(path))
                                     }
-                                }
-                            },
-                            containerColor = Color(0xFF0F0F11),
-                            textContentColor = Color.White,
-                            titleContentColor = Color.White
-                        )
-                    }
-                    is com.example.util.UpdateStatus.Error -> {
-                        AlertDialog(
-                            onDismissRequest = { com.example.util.AppUpdateManager.resetStatus() },
-                            title = {
-                                Text("Update Error", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFFFF5252))
-                            },
-                            text = {
-                                Text(status.message, fontSize = 13.sp, color = Color.LightGray)
-                            },
-                            confirmButton = {
-                                Button(
-                                    onClick = { com.example.util.AppUpdateManager.resetStatus() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222225), contentColor = Color.White)
-                                ) {
-                                    Text("DISMISS")
-                                }
-                            },
-                            containerColor = Color(0xFF0F0F11),
-                            textContentColor = Color.White,
-                            titleContentColor = Color.White
-                        )
-                    }
-                    else -> {}
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = com.example.ui.theme.WaterBlue)
+                            ) {
+                                Text("Install Now", color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showStartupUpdateDialog = false }) {
+                                Text("Later", color = Color.Gray)
+                            }
+                        },
+                        containerColor = Color(0xFF101014),
+                        shape = RoundedCornerShape(16.dp)
+                    )
                 }
 
                 val error = startupException
@@ -456,60 +341,6 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .padding(innerPadding)
                         ) {
-                            if (isUpdatePending && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(WaterBlue.copy(alpha = 0.12f))
-                                        .border(width = 1.dp, color = WaterBlue.copy(alpha = 0.4f), shape = RoundedCornerShape(12.dp))
-                                        .bouncyClick {
-                                            com.example.util.AppUpdateManager.triggerCheckForUpdates(context, manualCheck = true)
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Refresh,
-                                            contentDescription = "System Update Pending",
-                                            tint = WaterBlue,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = "System Update v$pendingUpdateVersion is Pending",
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = "Tap here to secure your data and install the update now.",
-                                                color = Color.LightGray,
-                                                fontSize = 9.sp
-                                            )
-                                        }
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(WaterBlue)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = "INSTALL",
-                                                color = Color.Black,
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.ExtraBold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
                             // Render screen container with premium fluid transition animations
                             Box(modifier = Modifier.fillMaxSize().background(Color.Transparent)) {
                                 AnimatedContent(
@@ -1329,14 +1160,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Keenly check for updates whenever the user opens/resumes the app
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                com.example.util.AppUpdateManager.checkForUpdates(applicationContext, manualCheck = false)
-            } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "onResume auto-update check failed", e)
-            }
-        }
     }
 
     override fun onStop() {

@@ -161,7 +161,7 @@ fun FriendsFocusDetailsDialog(
                         (totalMs / 1000).toInt()
                     }
                 } else {
-                    0
+                    (FocusTimerManager.accumulatedSessionTimeMs.value / 1000).toInt()
                 }
 
                 return completedTodaySecs + pendingSecs + activeSessionOverlap

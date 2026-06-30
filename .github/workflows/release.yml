@@ -44,14 +44,24 @@ jobs:
       env:
         FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_CREDENTIALS }}
         FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+        FIREBASE_GROUPS: ${{ secrets.FIREBASE_GROUPS }}
+        FIREBASE_TESTERS: ${{ secrets.FIREBASE_TESTERS }}
       if: env.FIREBASE_SERVICE_ACCOUNT != '' && env.FIREBASE_APP_ID != ''
       run: |
         echo "$FIREBASE_SERVICE_ACCOUNT" > firebase-key.json
         export GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json
-        npx firebase-tools appdistribution:distribute app/build/outputs/apk/release/app-release.apk \
-          --app "$FIREBASE_APP_ID" \
-          --groups "testers" \
-          --release-notes "Automated release build #${{ github.run_number }} uploaded via GitHub Actions."
+        
+        CMD="npx firebase-tools appdistribution:distribute app/build/outputs/apk/release/app-release.apk --app \"$FIREBASE_APP_ID\""
+        CMD="$CMD --release-notes \"Automated release build #${{ github.run_number }} uploaded via GitHub Actions.\""
+        
+        if [ -n "$FIREBASE_GROUPS" ]; then
+          CMD="$CMD --groups \"$FIREBASE_GROUPS\""
+        fi
+        if [ -n "$FIREBASE_TESTERS" ]; then
+          CMD="$CMD --testers \"$FIREBASE_TESTERS\""
+        fi
+        
+        eval $CMD
         rm -f firebase-key.json
 
     - name: Generate Public GitHub Release

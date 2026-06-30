@@ -151,6 +151,20 @@ object AppUpdateManager {
         prefs.edit().remove("pref_pending_update_version_code").apply()
     }
 
+    fun getReadyApkPath(context: Context): String? {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        return prefs.getString("pref_ready_apk_path", null)
+    }
+
+    fun setReadyApkPath(context: Context, path: String?) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        if (path == null) {
+            prefs.edit().remove("pref_ready_apk_path").apply()
+        } else {
+            prefs.edit().putString("pref_ready_apk_path", path).apply()
+        }
+    }
+
     /**
      * Retrieves the current app's version code.
      */
@@ -312,15 +326,34 @@ object AppUpdateManager {
                     errorLogs.add("GitHub API error: ${e.localizedMessage ?: e.toString()}")
                 }
 
+                // 1.5. Fetch update from Firebase App Distribution if SDK is available
+                var appDistributionVersionCode = -1
+                try {
+                    val appDist = com.google.firebase.appdistribution.FirebaseAppDistribution.getInstance()
+                    val task = appDist.checkForNewRelease()
+                    val release = com.google.android.gms.tasks.Tasks.await(task)
+                    if (release != null) {
+                        appDistributionVersionCode = release.versionCode.toInt()
+                        Log.d(TAG, "Firebase App Distribution latest release code: $appDistributionVersionCode")
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Firebase App Distribution check skipped or failed: ${e.localizedMessage}")
+                }
+
                 var finalTargetVersionCode = targetVersionCode
                 var finalApkFileId = apkFileId
+
+                if (appDistributionVersionCode > finalTargetVersionCode) {
+                    finalTargetVersionCode = appDistributionVersionCode
+                    // Keep existing APK file ID if available, or fall back to App Distribution in-app installer
+                }
 
                 if (githubVersionCode > finalTargetVersionCode) {
                     finalTargetVersionCode = githubVersionCode
                     finalApkFileId = githubApkUrl
                 }
 
-                Log.d(TAG, "Current Code: $currentCode, Firebase Target Code: $targetVersionCode, GitHub Target Code: $githubVersionCode, Chosen Target Code: $finalTargetVersionCode")
+                Log.d(TAG, "Current Code: $currentCode, Firebase Target Code: $targetVersionCode, App Distribution Code: $appDistributionVersionCode, GitHub Target Code: $githubVersionCode, Chosen Target Code: $finalTargetVersionCode")
 
                 if (finalTargetVersionCode > currentCode) {
                     setPendingUpdateVersion(context, finalTargetVersionCode)
@@ -329,6 +362,11 @@ object AppUpdateManager {
                         currentVersionCode = currentCode,
                         apkFileId = finalApkFileId
                     )
+                    
+                    if (isAutoUpdateEnabled(context) && !finalApkFileId.isNullOrBlank()) {
+                        Log.i(TAG, "Auto-update is enabled. Initiating silent background download...")
+                        startDownloadAndInstall(context, finalApkFileId)
+                    }
                 } else if (finalTargetVersionCode >= 0) {
                     clearPendingUpdateVersion(context)
                     _updateStatus.value = UpdateStatus.NoUpdateAvailable(
@@ -449,7 +487,7 @@ object AppUpdateManager {
      * Checks if the downloaded file is a valid ZIP/APK archive.
      * Prevents launching the package installer on HTML error pages, corrupted files, or truncated streams.
      */
-    private fun isValidApk(file: File): Boolean {
+    fun isValidApk(file: File): Boolean {
         if (!file.exists() || file.length() < 1000) return false
         return try {
             ZipFile(file).use { true }
@@ -699,6 +737,7 @@ object AppUpdateManager {
                 }
 
                 Log.i(TAG, "Successfully downloaded update APK to: ${apkFile.absolutePath}")
+                setReadyApkPath(context, apkFile.absolutePath)
                 _updateStatus.value = UpdateStatus.ReadyToInstall(apkFile)
                 showCompletionNotification(context, "System Update Downloaded", "Life OS update is ready to install. Tap to proceed.", true)
 
@@ -759,6 +798,7 @@ object AppUpdateManager {
 
                 Log.i(TAG, "Launching package installer for URI: $apkUri")
                 context.startActivity(intent)
+                setReadyApkPath(context, null)
                 
                 // Set state back to idle so they can click download again if installation fails or is cancelled
                 _updateStatus.value = UpdateStatus.ReadyToInstall(apkFile)

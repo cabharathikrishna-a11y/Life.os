@@ -989,6 +989,7 @@ object FocusTimerManager {
         if (isFocusPhase.value && !wasStartedFromStopwatch.value) {
             val chunkMs = lastResumeTimeMs.value?.let { System.currentTimeMillis() - it } ?: 0L
             accumulatedSessionTimeMs.value += chunkMs
+            cumulativeSessionFocusSeconds.value = (accumulatedSessionTimeMs.value / 1000).toInt()
         }
         lastResumeTimeMs.value = null // Wipes out active live-tracking
 
@@ -1254,6 +1255,7 @@ object FocusTimerManager {
         init(context)
         val chunkMs = lastResumeTimeMs.value?.let { System.currentTimeMillis() - it } ?: 0L
         accumulatedSessionTimeMs.value += chunkMs
+        stopwatchSeconds.value = (accumulatedSessionTimeMs.value / 1000).toInt()
         lastResumeTimeMs.value = null // Wipes out active live-tracking
 
         updateLocalInteractionTimestamp()
