@@ -574,7 +574,7 @@ fun CalendarSettingsSection(viewModel: AppViewModel) {
         )
     }
 
-    val permissionLauncher = androidx.compose.activity.compose.rememberLauncherForActivityResult(
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         hasPermission = (permissions[android.Manifest.permission.READ_CALENDAR] ?: false) &&

@@ -19,7 +19,14 @@ jobs:
       with:
         java-version: '17'
         distribution: 'zulu'
-        cache: 'gradle'
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '9.3.1'
+
+    - name: Regenerate Gradle Wrapper
+      run: gradle wrapper --gradle-version 9.3.1
 
     - name: Grant Execute Permission for Gradle
       run: chmod +x gradlew
