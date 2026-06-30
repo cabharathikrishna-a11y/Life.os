@@ -11,8 +11,8 @@ plugins {
 }
 
 // Decode debug.keystore from debug.keystore.base64 if it doesn't exist
-val rootKeystoreBase64 = rootProject.file("debug.keystore.base64")
-val rootKeystore = rootProject.file("debug.keystore")
+val rootKeystoreBase64 = file("${rootDir}/debug.keystore.base64")
+val rootKeystore = file("${rootDir}/debug.keystore")
 if (rootKeystoreBase64.exists() && (!rootKeystore.exists() || rootKeystore.length() == 0L)) {
   try {
     val base64Text = rootKeystoreBase64.readText().trim()
@@ -48,7 +48,19 @@ android {
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
         keyPassword = System.getenv("KEY_PASSWORD")
       } else {
-        storeFile = file("${rootDir}/debug.keystore")
+        val debugKeystore = file("${rootDir}/debug.keystore")
+        val base64File = file("${rootDir}/debug.keystore.base64")
+        if (!debugKeystore.exists() && base64File.exists()) {
+          try {
+            val base64Text = base64File.readText().trim()
+            val decodedBytes = Base64.getDecoder().decode(base64Text)
+            debugKeystore.writeBytes(decodedBytes)
+            logger.lifecycle("Decoded debug.keystore successfully in signingConfigs fallback")
+          } catch (e: Exception) {
+            logger.error("Failed to decode debug.keystore in signingConfigs fallback: ${e.message}", e)
+          }
+        }
+        storeFile = debugKeystore
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
