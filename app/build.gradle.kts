@@ -7,7 +7,7 @@ android {
     namespace = "com.example.myapplication"
     compileSdk {
         version = release(37) {
-            minorApiLevel = 1
+            minorApiLevel = 0
         }
     }
 
@@ -15,8 +15,13 @@ android {
         applicationId = "com.example.myapplication"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+
+        // --- AUTOMATED VERSIONING BLOCK ---
+        val versionPropsCode = if (project.hasProperty("versionCode")) project.property("versionCode").toString().toInt() else 1
+        val versionPropsName = if (project.hasProperty("versionName")) project.property("versionName").toString() else "1.0"
+
+        versionCode = versionPropsCode
+        versionName = versionPropsName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
