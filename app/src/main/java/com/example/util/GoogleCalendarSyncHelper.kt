@@ -11,12 +11,24 @@ import com.example.data.Task
 import java.text.SimpleDateFormat
 import java.util.*
 
+data class CalendarInfo(
+    val id: Long,
+    val accountName: String,
+    val accountType: String,
+    val displayName: String
+)
+
 object GoogleCalendarSyncHelper {
 
     private const val TAG = "GoogleCalendarSync"
 
-    // Helper to check and get a calendar ID (preferring Google account calendars)
+    // Helper to check and get a calendar ID (preferring Google account calendars or user's selected preferences)
     fun getOrCreateCalendarId(context: Context): Long? {
+        val prefs = context.getSharedPreferences("app_calendar_prefs", Context.MODE_PRIVATE)
+        val selectedAccount = prefs.getString("selected_calendar_account", null)
+        val selectedName = prefs.getString("selected_calendar_name", null)
+        val selectedId = prefs.getLong("selected_calendar_id", -1L)
+
         val resolver = context.contentResolver
         val projection = arrayOf(
             CalendarContract.Calendars._ID,
@@ -35,24 +47,48 @@ object GoogleCalendarSyncHelper {
                 null
             )
             
+            var matchedId: Long? = null
+            var googleFallbackId: Long? = null
             var fallbackId: Long? = null
+
             cursor?.use {
                 while (it.moveToNext()) {
                     val id = it.getLong(0)
-                    val accountType = it.getString(2)
+                    val accountName = it.getString(1) ?: ""
+                    val accountType = it.getString(2) ?: ""
+                    val displayName = it.getString(3) ?: ""
                     
-                    // Prefer Google account calendars
-                    if (accountType == "com.google") {
-                        Log.d(TAG, "Found Google Calendar ID: $id")
+                    // Priority 1: Match saved calendar ID precisely
+                    if (selectedId != -1L && id == selectedId) {
+                        Log.d(TAG, "Found precise selected calendar ID match: $id")
                         return id
+                    }
+                    
+                    // Priority 2: Match saved Account name & Display Name
+                    if (selectedAccount != null && selectedName != null &&
+                        accountName == selectedAccount && displayName == selectedName) {
+                        matchedId = id
+                    }
+                    
+                    // Priority 3: Fallbacks
+                    if (accountType == "com.google" && googleFallbackId == null) {
+                        googleFallbackId = id
                     }
                     if (fallbackId == null) {
                         fallbackId = id
                     }
                 }
             }
+            if (matchedId != null) {
+                Log.d(TAG, "Found preference-matched calendar ID: $matchedId")
+                return matchedId
+            }
+            if (googleFallbackId != null) {
+                Log.d(TAG, "Found Google Account fallback calendar ID: $googleFallbackId")
+                return googleFallbackId
+            }
             if (fallbackId != null) {
-                Log.d(TAG, "No Google Calendar found, falling back to calendar ID: $fallbackId")
+                Log.d(TAG, "Found general fallback calendar ID: $fallbackId")
                 return fallbackId
             }
         } catch (e: SecurityException) {
@@ -61,8 +97,44 @@ object GoogleCalendarSyncHelper {
             Log.e(TAG, "Error querying calendars: ${e.message}", e)
         }
 
-        // If no calendars exist, we can try to create a local one or return null
         return null
+    }
+
+    // Helper to query all available calendars on the device
+    fun getAvailableCalendars(context: Context): List<CalendarInfo> {
+        val list = mutableListOf<CalendarInfo>()
+        val resolver = context.contentResolver
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
+            CalendarContract.Calendars.CALENDAR_DISPLAY_NAME
+        )
+        
+        var cursor: Cursor? = null
+        try {
+            cursor = resolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                projection,
+                null,
+                null,
+                null
+            )
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val id = it.getLong(0)
+                    val accountName = it.getString(1) ?: "Local"
+                    val accountType = it.getString(2) ?: "Local"
+                    val displayName = it.getString(3) ?: "My Calendar"
+                    list.add(CalendarInfo(id, accountName, accountType, displayName))
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException querying calendars: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying calendars: ${e.message}", e)
+        }
+        return list
     }
 
     // Bidirectional sync

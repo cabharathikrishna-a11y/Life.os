@@ -353,92 +353,17 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        // Google Calendar Live Sync Control Card
+        // Automatic and silent Google Calendar Sync when screen is opened
         val context = LocalContext.current
-        val syncStatus by viewModel.calendarSyncStatus.collectAsState()
-
-        val permissionLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            val readGranted = permissions[android.Manifest.permission.READ_CALENDAR] ?: false
-            val writeGranted = permissions[android.Manifest.permission.WRITE_CALENDAR] ?: false
-            if (readGranted && writeGranted) {
+        LaunchedEffect(Unit) {
+            val hasRead = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_CALENDAR
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasWrite = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.WRITE_CALENDAR
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (hasRead && hasWrite) {
                 viewModel.syncGoogleCalendar(context)
-            } else {
-                android.widget.Toast.makeText(context, "Calendar permissions are required to sync.", android.widget.Toast.LENGTH_LONG).show()
-            }
-        }
-
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B1E)),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, Color(0xFF333336))
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Sync Icon",
-                        tint = WaterBlue,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Column {
-                        Text(
-                            text = "Google Calendar Sync",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = syncStatus,
-                            color = if (syncStatus.startsWith("Sync Complete")) Color(0xFF81C784) else Color.LightGray,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = {
-                        val hasRead = androidx.core.content.ContextCompat.checkSelfPermission(
-                            context, android.Manifest.permission.READ_CALENDAR
-                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                        val hasWrite = androidx.core.content.ContextCompat.checkSelfPermission(
-                            context, android.Manifest.permission.WRITE_CALENDAR
-                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                        if (hasRead && hasWrite) {
-                            viewModel.syncGoogleCalendar(context)
-                        } else {
-                            permissionLauncher.launch(
-                                arrayOf(
-                                    android.Manifest.permission.READ_CALENDAR,
-                                    android.Manifest.permission.WRITE_CALENDAR
-                                )
-                            )
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.height(30.dp)
-                ) {
-                    Text("Sync Now", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                }
             }
         }
 

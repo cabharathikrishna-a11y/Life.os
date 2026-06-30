@@ -2037,6 +2037,18 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         }
     }
 
+    fun triggerSilentCalendarSync() {
+        val hasRead = androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.READ_CALENDAR
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasWrite = androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.WRITE_CALENDAR
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (hasRead && hasWrite) {
+            syncGoogleCalendar(getApplication())
+        }
+    }
+
     fun setLoggedIn(username: String, isAdminUser: Boolean, userRemote: com.example.api.UserRemote?) {
         _isLoggedIn.value = true
         _isAdmin.value = isAdminUser
@@ -2490,12 +2502,14 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             val insertedId = repository.insertTask(task)
             val savedTask = task.copy(id = insertedId.toInt())
             com.example.util.AlarmScheduler.scheduleReminder(getApplication(), savedTask)
+            triggerSilentCalendarSync()
         }
     }
 
     fun updateTask(task: Task) {
         viewModelScope.launch {
             repository.updateTask(task)
+            triggerSilentCalendarSync()
             if (task.isCompleted) {
                 com.example.util.AlarmScheduler.cancelReminder(getApplication(), task.id)
                 // Cascade completion to all of its subtasks
@@ -2528,6 +2542,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             }
             val updatedTask = task.copy(isCompleted = newIsCompleted, description = newDescription)
             repository.updateTask(updatedTask)
+            triggerSilentCalendarSync()
             if (updatedTask.isCompleted) {
                 com.example.util.AlarmScheduler.cancelReminder(getApplication(), updatedTask.id)
                 // Cascade completion to all of its subtasks
@@ -2565,6 +2580,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             }
             repository.deleteTask(task)
             com.example.util.AlarmScheduler.cancelReminder(getApplication(), task.id)
+            triggerSilentCalendarSync()
         }
     }
 

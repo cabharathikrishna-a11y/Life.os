@@ -319,7 +319,7 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                 description = "Custom calendar display preferences and layout rules.",
                 onBack = { activePage = 0 }
             ) {
-                Text("Your daily tasks, directives, and reminders are collected and structured chronologically. The month grid adjusts to show items cleanly on dates.", color = Color.LightGray, fontSize = 12.sp, textAlign = TextAlign.Center)
+                CalendarSettingsSection(viewModel = viewModel)
             }
         }
 
@@ -555,5 +555,275 @@ fun SettingsSubpageWorkspace(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             content = content
         )
+    }
+}
+
+@Composable
+fun CalendarSettingsSection(viewModel: AppViewModel) {
+    val context = LocalContext.current
+    val syncStatus by viewModel.calendarSyncStatus.collectAsState()
+
+    var hasPermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_CALENDAR
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.WRITE_CALENDAR
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = androidx.compose.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        hasPermission = (permissions[android.Manifest.permission.READ_CALENDAR] ?: false) &&
+                        (permissions[android.Manifest.permission.WRITE_CALENDAR] ?: false)
+    }
+
+    // Prefs
+    val prefs = remember { context.getSharedPreferences("app_calendar_prefs", android.content.Context.MODE_PRIVATE) }
+    var selectedAccount by remember { mutableStateOf(prefs.getString("selected_calendar_account", null)) }
+    var selectedName by remember { mutableStateOf(prefs.getString("selected_calendar_name", null)) }
+    var selectedId by remember { mutableStateOf(prefs.getLong("selected_calendar_id", -1L)) }
+
+    // Query calendars if permission is granted
+    val calendars = remember(hasPermission) {
+        if (hasPermission) {
+            com.example.util.GoogleCalendarSyncHelper.getAvailableCalendars(context)
+        } else {
+            emptyList()
+        }
+    }
+
+    // Dropdown states
+    var accountExpanded by remember { mutableStateOf(false) }
+    var nameExpanded by remember { mutableStateOf(false) }
+
+    val uniqueAccounts = remember(calendars) {
+        calendars.map { it.accountName }.distinct()
+    }
+
+    val filteredNames = remember(calendars, selectedAccount) {
+        if (selectedAccount == null) calendars else calendars.filter { it.accountName == selectedAccount }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0D11)),
+            border = BorderStroke(1.dp, Color(0xFF222225)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.DateRange,
+                        contentDescription = "GCal",
+                        tint = WaterBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        "Google Calendar Sync",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Text(
+                    "Enable bidirectional background synchronization with Google Calendar. Whenever you open the Calendar or modify tasks, synchronization occurs silently and automatically.",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+
+                if (!hasPermission) {
+                    Button(
+                        onClick = {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.READ_CALENDAR,
+                                    android.Manifest.permission.WRITE_CALENDAR
+                                )
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Grant Calendar Permissions", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Text(
+                        "✓ Calendar Permissions Granted",
+                        color = Color(0xFF81C784),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (hasPermission) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0D11)),
+                border = BorderStroke(1.dp, Color(0xFF222225)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Synchronized Account & Calendar",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    // Dropdown for Google Account
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Google Account", color = Color.Gray, fontSize = 11.sp)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF16161B), RoundedCornerShape(8.dp))
+                                    .clickable { accountExpanded = true }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = selectedAccount ?: "Choose Google Account (Default: First GCal)",
+                                    color = if (selectedAccount != null) Color.White else Color.Gray,
+                                    fontSize = 13.sp
+                                )
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color.Gray)
+                            }
+
+                            DropdownMenu(
+                                expanded = accountExpanded,
+                                onDismissRequest = { accountExpanded = false },
+                                modifier = Modifier.background(Color(0xFF1B1B22))
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Default (First Google Account)", color = Color.White) },
+                                    onClick = {
+                                        selectedAccount = null
+                                        selectedName = null
+                                        selectedId = -1L
+                                        prefs.edit()
+                                            .remove("selected_calendar_account")
+                                            .remove("selected_calendar_name")
+                                            .putLong("selected_calendar_id", -1L)
+                                            .apply()
+                                        accountExpanded = false
+                                    }
+                                )
+                                uniqueAccounts.forEach { acc ->
+                                    DropdownMenuItem(
+                                        text = { Text(acc, color = Color.White) },
+                                        onClick = {
+                                            selectedAccount = acc
+                                            // Reset selectedName if not belonging to this account
+                                            if (calendars.none { it.accountName == acc && it.displayName == selectedName }) {
+                                                selectedName = null
+                                                selectedId = -1L
+                                            }
+                                            prefs.edit()
+                                                .putString("selected_calendar_account", acc)
+                                                .putString("selected_calendar_name", selectedName)
+                                                .putLong("selected_calendar_id", selectedId)
+                                                .apply()
+                                            accountExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Dropdown for Calendar Name
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Calendar Name", color = Color.Gray, fontSize = 11.sp)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF16161B), RoundedCornerShape(8.dp))
+                                    .clickable { nameExpanded = true }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = selectedName ?: "Choose Calendar (Default: Main)",
+                                    color = if (selectedName != null) Color.White else Color.Gray,
+                                    fontSize = 13.sp
+                                )
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color.Gray)
+                            }
+
+                            DropdownMenu(
+                                expanded = nameExpanded,
+                                onDismissRequest = { nameExpanded = false },
+                                modifier = Modifier.background(Color(0xFF1B1B22))
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Default (Primary Calendar)", color = Color.White) },
+                                    onClick = {
+                                        selectedName = null
+                                        selectedId = -1L
+                                        prefs.edit()
+                                            .remove("selected_calendar_name")
+                                            .putLong("selected_calendar_id", -1L)
+                                            .apply()
+                                        nameExpanded = false
+                                    }
+                                )
+                                filteredNames.forEach { cal ->
+                                    DropdownMenuItem(
+                                        text = { Text(cal.displayName, color = Color.White) },
+                                        onClick = {
+                                            selectedName = cal.displayName
+                                            selectedId = cal.id
+                                            prefs.edit()
+                                                .putString("selected_calendar_name", cal.displayName)
+                                                .putLong("selected_calendar_id", cal.id)
+                                                .apply()
+                                            nameExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Sync Status", color = Color.Gray, fontSize = 11.sp)
+                            Text(syncStatus, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { viewModel.syncGoogleCalendar(context) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text("Sync Now", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
