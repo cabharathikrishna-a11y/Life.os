@@ -1,12 +1,14 @@
-name: Deploy to Firebase App Distribution
+name: Automated Public Release Generation
 
 on:
   push:
-    branches: [ main ] # This triggers the automation every time you push to 'main'
+    branches: [ main ]
 
 jobs:
-  build_and_deploy:
+  release_pipeline:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Crucial: Gives the cloud runner permission to create a public release
 
     steps:
     - name: Checkout Code
@@ -22,13 +24,16 @@ jobs:
     - name: Grant Execute Permission for Gradle
       run: chmod +x gradlew
 
-    - name: Build Release APK
-      run: ./gradlew assembleRelease
+    # We pass the cloud build number directly into the compilation step automatically
+    - name: Compile Automated Release APK
+      run: ./gradlew assembleRelease -PversionCode=${{ github.run_number }} -PversionName="1.0.${{ github.run_number }}"
 
-    - name: Upload to Firebase App Distribution
-      uses: wzieba/Firebase-Distribution-Github-Action@v1
+    - name: Generate Public GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
-        appId: ${{ secrets.FIREBASE_APP_ID }}
-        serviceCredentialsFileContent: ${{ secrets.FIREBASE_CREDENTIALS }}
-        groups: testers # Optional: Add your Firebase tester group alias here
-        file: app/build/outputs/apk/release/app-release.apk
+        tag_name: v1.0.${{ github.run_number }}
+        name: Release v1.0.${{ github.run_number }}
+        body: |
+          Automated build updates compiled successfully via GitHub Actions.
+          Tracking Identifier: Build #${{ github.run_number }}
+        files: app/build/outputs/apk/release/app-release.apk
