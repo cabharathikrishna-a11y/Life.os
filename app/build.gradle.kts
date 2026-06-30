@@ -10,6 +10,20 @@ plugins {
   alias(libs.plugins.firebase.crashlytics)
 }
 
+// Decode debug.keystore from debug.keystore.base64 if it doesn't exist
+val rootKeystoreBase64 = rootProject.file("debug.keystore.base64")
+val rootKeystore = rootProject.file("debug.keystore")
+if (rootKeystoreBase64.exists() && (!rootKeystore.exists() || rootKeystore.length() == 0L)) {
+  try {
+    val base64Text = rootKeystoreBase64.readText().trim()
+    val decodedBytes = Base64.getDecoder().decode(base64Text)
+    rootKeystore.writeBytes(decodedBytes)
+    logger.lifecycle("Decoded debug.keystore from debug.keystore.base64 successfully to ${rootKeystore.absolutePath}")
+  } catch (e: Exception) {
+    logger.error("Failed to decode debug.keystore from base64: ${e.message}", e)
+  }
+}
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -25,19 +39,6 @@ android {
   }
 
   signingConfigs {
-    val debugKeystore = file("${rootDir}/debug.keystore")
-    val base64File = file("${rootDir}/debug.keystore.base64")
-    if (!debugKeystore.exists() && base64File.exists()) {
-      try {
-        val base64Text = base64File.readText().trim()
-        val decodedBytes = Base64.getDecoder().decode(base64Text)
-        debugKeystore.writeBytes(decodedBytes)
-        println("Decoded debug.keystore from debug.keystore.base64 successfully")
-      } catch (e: Exception) {
-        System.err.println("Failed to decode debug.keystore from base64: ${e.message}")
-      }
-    }
-
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       val keystoreFile = file(keystorePath)
