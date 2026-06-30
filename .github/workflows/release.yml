@@ -42,7 +42,7 @@ jobs:
 
     - name: Distribute Release APK to Firebase App Distribution
       env:
-        FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_CREDENTIALS }}
         FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
       if: env.FIREBASE_SERVICE_ACCOUNT != '' && env.FIREBASE_APP_ID != ''
       run: |
