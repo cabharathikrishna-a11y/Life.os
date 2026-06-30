@@ -87,11 +87,15 @@ jobs:
     - name: Update Firebase Realtime Database Update Config
       run: |
         VERSION_CODE=${{ env.VERSION_CODE }}
-        APK_URL="https://github.com/cabharathikrishna/Life.os/releases/download/v1.0.$VERSION_CODE/app-release.apk"
+        REPO_NAME="${{ github.repository }}"
+        APK_URL="https://github.com/${REPO_NAME}/releases/download/v1.0.$VERSION_CODE/app-release.apk"
+        
+        OWNER=$(echo "$REPO_NAME" | cut -d'/' -f1)
+        REPO=$(echo "$REPO_NAME" | cut -d'/' -f2)
         
         # Update update_config.json
         curl -X PUT -H "Content-Type: application/json" \
-          -d "{\"versionId\": $VERSION_CODE, \"apkFileId\": \"$APK_URL\"}" \
+          -d "{\"versionId\": $VERSION_CODE, \"apkFileId\": \"$APK_URL\", \"githubOwner\": \"$OWNER\", \"githubRepo\": \"$REPO\"}" \
           "https://cloud-storage-f8ab3-default-rtdb.asia-southeast1.firebasedatabase.app/update_config.json"
           
         # Update versionId.json

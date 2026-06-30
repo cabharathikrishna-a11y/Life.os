@@ -312,6 +312,18 @@ object AppUpdateManager {
                                             targetVersionCode = vId
                                             apkFileId = if (fId != "null" && fId.isNotEmpty()) fId else null
                                         }
+                                        
+                                        // Learn owner and repository names dynamically from Firebase
+                                        val owner = json.optString("githubOwner", json.optString("github_owner", ""))
+                                        val repo = json.optString("githubRepo", json.optString("github_repo", ""))
+                                        if (owner.isNotEmpty()) {
+                                            setGithubOwner(context, owner)
+                                            Log.d(TAG, "Dynamically synced GitHub owner from Firebase config: $owner")
+                                        }
+                                        if (repo.isNotEmpty()) {
+                                            setGithubRepo(context, repo)
+                                            Log.d(TAG, "Dynamically synced GitHub repository from Firebase config: $repo")
+                                        }
                                     }
                                     
                                     val historyResult = findHighestVersionInJson(body)
@@ -479,6 +491,10 @@ object AppUpdateManager {
 
                 if (githubVersionCode > finalTargetVersionCode) {
                     finalTargetVersionCode = githubVersionCode
+                    finalApkFileId = githubApkUrl
+                } else if (githubVersionCode == finalTargetVersionCode && !githubApkUrl.isNullOrBlank()) {
+                    // Prefer the verified, direct GitHub asset download URL returned by the official API
+                    Log.d(TAG, "GitHub version matches target version ($finalTargetVersionCode). Using verified GitHub asset URL: $githubApkUrl")
                     finalApkFileId = githubApkUrl
                 }
 
