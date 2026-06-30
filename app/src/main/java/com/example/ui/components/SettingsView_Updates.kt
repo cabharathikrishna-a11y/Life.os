@@ -186,6 +186,26 @@ fun SettingsUpdatesPage(
                             Text("Check for Updates", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
 
+                        // Download & Install button if a new version is available but not yet downloaded
+                        if (updateStatus is UpdateStatus.NewVersionAvailable) {
+                            val state = updateStatus as UpdateStatus.NewVersionAvailable
+                            Button(
+                                onClick = {
+                                    AppUpdateManager.startDownloadAndInstall(context, state.apkFileId)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("download_updates_btn"),
+                                colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Download", tint = Color.Black)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Download & Install Build ${state.versionId}", color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
                         // Install button if update downloaded
                         val canInstall = updateStatus is UpdateStatus.ReadyToInstall || isOfflineApkReady
                         val apkFileToInstall = when {

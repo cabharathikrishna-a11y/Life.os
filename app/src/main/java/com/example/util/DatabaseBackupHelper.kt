@@ -16,6 +16,17 @@ object DatabaseBackupHelper {
 
     suspend fun exportData(context: Context, database: AppDatabase, uri: Uri): Boolean {
         return try {
+            context.contentResolver.openOutputStream(uri)?.use { fos ->
+                exportDataToStream(context, database, fos)
+            } ?: false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export data to Uri", e)
+            false
+        }
+    }
+
+    suspend fun exportDataToStream(context: Context, database: AppDatabase, outputStream: java.io.OutputStream): Boolean {
+        return try {
             val root = JSONObject()
             root.put("version", 5) // current schema version
             root.put("files_dir_path_placeholder", com.example.util.StorageHelper.getAppFilesDir(context).absolutePath)
@@ -314,35 +325,33 @@ object DatabaseBackupHelper {
             """.trimIndent()
             
             // Export inside a UNIFIED zip archive
-            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                java.util.zip.ZipOutputStream(outputStream).use { zipOut ->
-                    // 1. Write the backup JSON database dump
-                    val jsonEntry = java.util.zip.ZipEntry("backup_data.json")
-                    zipOut.putNextEntry(jsonEntry)
-                    val jsonWriter = java.io.BufferedWriter(java.io.OutputStreamWriter(zipOut, Charsets.UTF_8))
-                    jsonWriter.write(jsonString)
-                    jsonWriter.flush()
-                    zipOut.closeEntry()
+            java.util.zip.ZipOutputStream(outputStream).use { zipOut ->
+                // 1. Write the backup JSON database dump
+                val jsonEntry = java.util.zip.ZipEntry("backup_data.json")
+                zipOut.putNextEntry(jsonEntry)
+                val jsonWriter = java.io.BufferedWriter(java.io.OutputStreamWriter(zipOut, Charsets.UTF_8))
+                jsonWriter.write(jsonString)
+                jsonWriter.flush()
+                zipOut.closeEntry()
 
-                    // 1b. Write the backup summary manifest
-                    val summaryEntry = java.util.zip.ZipEntry("backup_summary.txt")
-                    zipOut.putNextEntry(summaryEntry)
-                    val summaryWriter = java.io.BufferedWriter(java.io.OutputStreamWriter(zipOut, Charsets.UTF_8))
-                    summaryWriter.write(summaryText)
-                    summaryWriter.flush()
-                    zipOut.closeEntry()
+                // 1b. Write the backup summary manifest
+                val summaryEntry = java.util.zip.ZipEntry("backup_summary.txt")
+                zipOut.putNextEntry(summaryEntry)
+                val summaryWriter = java.io.BufferedWriter(java.io.OutputStreamWriter(zipOut, Charsets.UTF_8))
+                summaryWriter.write(summaryText)
+                summaryWriter.flush()
+                zipOut.closeEntry()
 
-                    // 2. Write all physical files (journal photos, recordings, local files)
-                    filesList.forEach { file ->
-                        if (file.isFile) {
-                            val entryName = "media/${file.name}"
-                            val fileEntry = java.util.zip.ZipEntry(entryName)
-                            zipOut.putNextEntry(fileEntry)
-                            file.inputStream().use { input ->
-                                FileChunkHelper.copyStreamSecure(input, zipOut, bufferSize = 8192)
-                            }
-                            zipOut.closeEntry()
+                // 2. Write all physical files (journal photos, recordings, local files)
+                filesList.forEach { file ->
+                    if (file.isFile) {
+                        val entryName = "media/${file.name}"
+                        val fileEntry = java.util.zip.ZipEntry(entryName)
+                        zipOut.putNextEntry(fileEntry)
+                        file.inputStream().use { input ->
+                            FileChunkHelper.copyStreamSecure(input, zipOut, bufferSize = 8192)
                         }
+                        zipOut.closeEntry()
                     }
                 }
             }
@@ -355,73 +364,82 @@ object DatabaseBackupHelper {
 
     suspend fun importData(context: Context, database: AppDatabase, uri: Uri): Boolean {
         return try {
+            context.contentResolver.openInputStream(uri)?.use { rawIn ->
+                importDataFromStream(context, database, rawIn)
+            } ?: false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to import data from Uri", e)
+            false
+        }
+    }
+
+    suspend fun importDataFromStream(context: Context, database: AppDatabase, rawIn: java.io.InputStream): Boolean {
+        return try {
             val filesDir = com.example.util.StorageHelper.getAppFilesDir(context)
             var backupSummaryString: String? = null
             var tempJsonFile: java.io.File? = null
 
-            context.contentResolver.openInputStream(uri)?.use { rawIn ->
-                val bufferedIn = java.io.BufferedInputStream(rawIn)
-                bufferedIn.mark(4)
-                val header = ByteArray(4)
-                val read = bufferedIn.read(header)
-                if (read == -1) return false
-                bufferedIn.reset()
+            val bufferedIn = java.io.BufferedInputStream(rawIn)
+            bufferedIn.mark(4)
+            val header = ByteArray(4)
+            val read = bufferedIn.read(header)
+            if (read == -1) return false
+            bufferedIn.reset()
 
-                val isZip = read == 4 &&
-                        header[0] == 0x50.toByte() &&
-                        header[1] == 0x4B.toByte() &&
-                        header[2] == 0x03.toByte() &&
-                        header[3] == 0x04.toByte()
+            val isZip = read == 4 &&
+                    header[0] == 0x50.toByte() &&
+                    header[1] == 0x4B.toByte() &&
+                    header[2] == 0x03.toByte() &&
+                    header[3] == 0x04.toByte()
 
-                if (!isZip) {
-                    val contentStr = bufferedIn.bufferedReader(Charsets.UTF_8).readText()
-                    return parseAndRestoreDb(context, database, contentStr)
-                } else {
-                    val zipIn = java.util.zip.ZipInputStream(bufferedIn)
-                    var entry = zipIn.nextEntry
-                    while (entry != null) {
-                        if (entry.name == "backup_summary.txt") {
-                            val bos = java.io.ByteArrayOutputStream()
-                            FileChunkHelper.copyStreamSecure(zipIn, bos, bufferSize = 8192)
-                            backupSummaryString = bos.toString("UTF-8")
-                        } else if (entry.name == "backup_data.json") {
-                            val tempFile = java.io.File(context.cacheDir, "temp_backup_data.json")
-                            tempFile.outputStream().use { output ->
+            if (!isZip) {
+                val contentStr = bufferedIn.bufferedReader(Charsets.UTF_8).readText()
+                return parseAndRestoreDb(context, database, contentStr)
+            } else {
+                val zipIn = java.util.zip.ZipInputStream(bufferedIn)
+                var entry = zipIn.nextEntry
+                while (entry != null) {
+                    if (entry.name == "backup_summary.txt") {
+                        val bos = java.io.ByteArrayOutputStream()
+                        FileChunkHelper.copyStreamSecure(zipIn, bos, bufferSize = 8192)
+                        backupSummaryString = bos.toString("UTF-8")
+                    } else if (entry.name == "backup_data.json") {
+                        val tempFile = java.io.File(context.cacheDir, "temp_backup_data.json")
+                        tempFile.outputStream().use { output ->
+                            FileChunkHelper.copyStreamSecure(zipIn, output, bufferSize = 8192)
+                        }
+                        tempJsonFile = tempFile
+                    } else if (entry.name.startsWith("media/")) {
+                        val fileName = entry.name.substringAfter("media/")
+                        if (fileName.isNotEmpty()) {
+                            val destFile = java.io.File(filesDir, fileName)
+                            destFile.parentFile?.mkdirs()
+                            destFile.outputStream().use { output ->
                                 FileChunkHelper.copyStreamSecure(zipIn, output, bufferSize = 8192)
                             }
-                            tempJsonFile = tempFile
-                        } else if (entry.name.startsWith("media/")) {
-                            val fileName = entry.name.substringAfter("media/")
-                            if (fileName.isNotEmpty()) {
-                                val destFile = java.io.File(filesDir, fileName)
-                                destFile.parentFile?.mkdirs()
-                                destFile.outputStream().use { output ->
-                                    FileChunkHelper.copyStreamSecure(zipIn, output, bufferSize = 8192)
-                                }
-                            }
                         }
-                        zipIn.closeEntry()
-                        entry = zipIn.nextEntry
                     }
-                    zipIn.close()
+                    zipIn.closeEntry()
+                    entry = zipIn.nextEntry
+                }
+                zipIn.close()
 
-                    if (tempJsonFile != null && tempJsonFile.exists()) {
-                        val jsonContent = tempJsonFile.readText(Charsets.UTF_8)
-                        val restoreResult = parseAndRestoreDb(context, database, jsonContent)
-                        tempJsonFile.delete() // Clean up disk cache immediately
-                        
-                        if (restoreResult) {
-                            if (backupSummaryString != null) {
-                                verifyImportCounts(context, database, backupSummaryString)
-                            }
-                            return true
+                if (tempJsonFile != null && tempJsonFile.exists()) {
+                    val jsonContent = tempJsonFile.readText(Charsets.UTF_8)
+                    val restoreResult = parseAndRestoreDb(context, database, jsonContent)
+                    tempJsonFile.delete() // Clean up disk cache immediately
+                    
+                    if (restoreResult) {
+                        if (backupSummaryString != null) {
+                            verifyImportCounts(context, database, backupSummaryString)
                         }
+                        return true
                     }
                 }
             }
             false
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to import data", e)
+            Log.e(TAG, "Failed to import data from Stream", e)
             false
         }
     }

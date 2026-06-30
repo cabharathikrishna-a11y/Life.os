@@ -19,6 +19,7 @@ object GoogleDriveSyncManager {
     private const val TAG = "GoogleDriveSync"
     private const val DRIVE_SCOPE = "oauth2:https://www.googleapis.com/auth/drive.appdata"
     private const val BACKUP_FILE_NAME = "focus_backup.json"
+    private const val ALL_DATA_BACKUP_FILE_NAME = "app_data_backup.zip"
 
     private val client = OkHttpClient()
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -184,11 +185,166 @@ object GoogleDriveSyncManager {
     }
 
     /**
+     * Performs a backup of the entire app database and attachment files (ZIP package)
+     * to the user's hidden Google Drive AppData folder.
+     */
+    suspend fun backupAllAppData(
+        context: Context,
+        database: com.example.data.AppDatabase,
+        onAuthResolutionRequired: (Intent) -> Unit = {}
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val token = getAccessToken(context, onAuthResolutionRequired)
+            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+
+        try {
+            // 1. Create a temp file to hold our zip backup
+            val tempFile = java.io.File(context.cacheDir, "temp_app_data_backup.zip")
+            if (tempFile.exists()) tempFile.delete()
+
+            // 2. Export database and files to the temp zip file
+            val exportSuccess = tempFile.outputStream().use { fos ->
+                DatabaseBackupHelper.exportDataToStream(context, database, fos)
+            }
+
+            if (!exportSuccess) {
+                if (tempFile.exists()) tempFile.delete()
+                return@withContext Pair(false, "Failed to compile backup package locally.")
+            }
+
+            // 3. Find if the file already exists in AppData
+            var fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
+            if (fileId == null) {
+                fileId = createFileMetadata(token, ALL_DATA_BACKUP_FILE_NAME)
+                if (fileId == null) {
+                    tempFile.delete()
+                    return@withContext Pair(false, "Failed to initialize backup slot in Google Drive.")
+                }
+            }
+
+            // 4. Upload the zip binary
+            val bytes = tempFile.readBytes()
+            val requestBody = bytes.toRequestBody("application/zip".toMediaType())
+            val url = "https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/zip")
+                .patch(requestBody)
+                .build()
+
+            var uploadSuccess = false
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    uploadSuccess = true
+                } else {
+                    Log.e(TAG, "Error uploading zip: code=${response.code} body=${response.body?.string()}")
+                }
+            }
+
+            // Clean up
+            tempFile.delete()
+
+            if (uploadSuccess) {
+                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
+                Pair(true, "Successfully backed up all app data and files to Google Drive.")
+            } else {
+                Pair(false, "Failed to upload backup package to Google Drive.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error backing up all app data", e)
+            Pair(false, "Backup Error: ${e.localizedMessage ?: "Unknown error"}")
+        }
+    }
+
+    /**
+     * Downloads and restores the entire app database and attachment files (ZIP package)
+     * from the user's hidden Google Drive AppData folder.
+     */
+    suspend fun restoreAllAppData(
+        context: Context,
+        database: com.example.data.AppDatabase,
+        onAuthResolutionRequired: (Intent) -> Unit = {}
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val token = getAccessToken(context, onAuthResolutionRequired)
+            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+
+        try {
+            // 1. Find the file ID in Google Drive
+            val fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
+                ?: return@withContext Pair(false, "No full app data backup found on Google Drive. Save a backup first.")
+
+            // 2. Download zip content
+            val url = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            val tempFile = java.io.File(context.cacheDir, "temp_app_data_restore.zip")
+            if (tempFile.exists()) tempFile.delete()
+
+            var downloadSuccess = false
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    response.body?.byteStream()?.use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    downloadSuccess = true
+                } else {
+                    Log.e(TAG, "Failed downloading zip backup: code=${response.code}")
+                }
+            }
+
+            if (!downloadSuccess) {
+                tempFile.delete()
+                return@withContext Pair(false, "Failed to download backup package from Google Drive.")
+            }
+
+            // 3. Import data from temp zip file
+            val importSuccess = tempFile.inputStream().use { fis ->
+                DatabaseBackupHelper.importDataFromStream(context, database, fis)
+            }
+
+            tempFile.delete()
+
+            if (importSuccess) {
+                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
+                Pair(true, "Successfully restored all app data and files from Google Drive!")
+            } else {
+                Pair(false, "Failed to restore downloaded backup package.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restoring all app data", e)
+            Pair(false, "Restore Error: ${e.localizedMessage ?: "Unknown error"}")
+        }
+    }
+
+    /**
      * Searches for 'focus_backup.json' in the AppData folder.
      * Returns its fileId or null if not found.
      */
     private fun findBackupFileId(accessToken: String): String? {
-        val query = "name = '$BACKUP_FILE_NAME'"
+        return findFileId(accessToken, BACKUP_FILE_NAME)
+    }
+
+    /**
+     * Creates empty file metadata for 'focus_backup.json' in 'appDataFolder'.
+     * Returns the created fileId or null.
+     */
+    private fun createBackupFileMetadata(accessToken: String): String? {
+        return createFileMetadata(accessToken, BACKUP_FILE_NAME)
+    }
+
+    /**
+     * Generic file finder inside Google Drive appDataFolder.
+     */
+    private fun findFileId(accessToken: String, fileName: String): String? {
+        val query = "name = '$fileName'"
         val encodedQuery = try {
             java.net.URLEncoder.encode(query, "UTF-8")
         } catch (e: Exception) {
@@ -218,13 +374,12 @@ object GoogleDriveSyncManager {
     }
 
     /**
-     * Creates empty file metadata for 'focus_backup.json' in 'appDataFolder'.
-     * Returns the created fileId or null.
+     * Generic file metadata creator inside Google Drive appDataFolder.
      */
-    private fun createBackupFileMetadata(accessToken: String): String? {
+    private fun createFileMetadata(accessToken: String, fileName: String): String? {
         val url = "https://www.googleapis.com/drive/v3/files"
         val bodyJson = JSONObject().apply {
-            put("name", BACKUP_FILE_NAME)
+            put("name", fileName)
             val parentsArray = org.json.JSONArray().apply {
                 put("appDataFolder")
             }

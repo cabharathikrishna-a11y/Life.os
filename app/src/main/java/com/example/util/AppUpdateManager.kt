@@ -197,6 +197,70 @@ object AppUpdateManager {
     }
 
     /**
+     * Parses the given JSON string to extract the highest version code and its corresponding apkFileId.
+     * Supports standard updates JSON mapping, version entries list, arrays, etc.
+     */
+    private fun findHighestVersionInJson(body: String): Pair<Int, String?>? {
+        try {
+            val trimmed = body.trim()
+            var highestVersion = -1
+            var bestFileId: String? = null
+
+            fun checkEntry(vId: Int, fileId: String?) {
+                if (vId > highestVersion && !fileId.isNullOrBlank() && fileId != "null") {
+                    highestVersion = vId
+                    bestFileId = fileId
+                }
+            }
+
+            if (trimmed.startsWith("{")) {
+                val json = JSONObject(trimmed)
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val value = json.get(key)
+                    
+                    // Case A: key is a version code (like "5"), value is an object or string
+                    val keyAsInt = key.toIntOrNull()
+                    if (keyAsInt != null) {
+                        if (value is JSONObject) {
+                            val fileId = value.optString("apkFileId", value.optString("apk_file_id", value.optString("fileId", null)))
+                            checkEntry(keyAsInt, fileId)
+                        } else if (value is String) {
+                            checkEntry(keyAsInt, value)
+                        }
+                    }
+
+                    // Case B: standard object with "versionId" inside
+                    if (value is JSONObject) {
+                        val vId = value.optInt("versionId", value.optInt("version_id", value.optInt("version", -1)))
+                        val fileId = value.optString("apkFileId", value.optString("apk_file_id", value.optString("fileId", null)))
+                        checkEntry(vId, fileId)
+                    }
+                }
+            } else if (trimmed.startsWith("[")) {
+                val array = org.json.JSONArray(trimmed)
+                for (i in 0 until array.length()) {
+                    if (array.isNull(i)) continue
+                    val value = array.get(i)
+                    if (value is JSONObject) {
+                        val vId = value.optInt("versionId", value.optInt("version_id", value.optInt("version", -1)))
+                        val fileId = value.optString("apkFileId", value.optString("apk_file_id", value.optString("fileId", null)))
+                        checkEntry(vId, fileId)
+                    }
+                }
+            }
+
+            if (highestVersion != -1) {
+                return Pair(highestVersion, bestFileId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding highest version in JSON", e)
+        }
+        return null
+    }
+
+    /**
      * Checks for updates from Firebase Realtime Database.
      */
     suspend fun checkForUpdates(context: Context, manualCheck: Boolean = false) {
@@ -221,32 +285,47 @@ object AppUpdateManager {
                 var targetVersionCode = -1
                 var apkFileId: String? = null
                 
-                val configUrl = "${FirebaseConfig.DATABASE_URL}update_config.json"
-                val request = Request.Builder().url(configUrl).get().build()
-                
-                try {
-                    client.newCall(request).execute().use { response ->
-                        if (response.isSuccessful) {
-                            val body = response.body?.string()
-                            if (!body.isNullOrBlank() && body != "null") {
-                                if (body.contains("\"error\"")) {
-                                    errorLogs.add("Firebase returned database error: $body")
-                                } else {
-                                    val json = JSONObject(body)
-                                    targetVersionCode = json.optInt("versionId", json.optInt("version_id", -1))
-                                    apkFileId = json.optString("apkFileId", json.optString("apk_file_id", null))
-                                    if (apkFileId == "null") apkFileId = null
+                // Let's try multiple potential paths in Firebase to find the highest/latest update version and its apkFileId
+                val pathsToTry = listOf(
+                    "update_config.json",
+                    "versions.json",
+                    "releases.json",
+                    "updates.json",
+                    "update_history.json",
+                    "update_config/versions.json",
+                    "update_config/history.json"
+                )
+
+                for (path in pathsToTry) {
+                    try {
+                        val url = "${FirebaseConfig.DATABASE_URL}$path"
+                        val request = Request.Builder().url(url).get().build()
+                        client.newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                val body = response.body?.string()
+                                if (!body.isNullOrBlank() && body != "null" && !body.contains("\"error\"")) {
+                                    if (path == "update_config.json") {
+                                        val json = JSONObject(body)
+                                        val vId = json.optInt("versionId", json.optInt("version_id", -1))
+                                        val fId = json.optString("apkFileId", json.optString("apk_file_id", null))
+                                        if (vId > targetVersionCode) {
+                                            targetVersionCode = vId
+                                            apkFileId = if (fId != "null" && fId.isNotEmpty()) fId else null
+                                        }
+                                    }
+                                    
+                                    val historyResult = findHighestVersionInJson(body)
+                                    if (historyResult != null && historyResult.first > targetVersionCode) {
+                                        targetVersionCode = historyResult.first
+                                        apkFileId = historyResult.second
+                                        Log.d(TAG, "Found higher version ${historyResult.first} with file ID ${historyResult.second} from Firebase path: $path")
+                                    }
                                 }
-                            } else {
-                                errorLogs.add("Empty response body from update_config.json")
                             }
-                        } else {
-                            errorLogs.add("HTTP ${response.code} ${response.message} for update_config.json")
                         }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to check Firebase path: $path", e)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to fetch update_config.json", e)
-                    errorLogs.add("Failed to fetch update_config.json: ${e.localizedMessage ?: e.toString()}")
                 }
 
                 // If update_config was empty or failed, try fetching versionId.json directly
@@ -273,6 +352,56 @@ object AppUpdateManager {
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to fetch versionId.json", e)
                         errorLogs.add("Failed to fetch versionId.json: ${e.localizedMessage ?: e.toString()}")
+                    }
+                }
+
+                // If we have a target version, but no apkFileId yet, try to find the specific version's apkFileId from previous versions list
+                if (targetVersionCode != -1 && apkFileId == null) {
+                    val specificPaths = listOf(
+                        "versions/$targetVersionCode.json",
+                        "releases/$targetVersionCode.json",
+                        "updates/$targetVersionCode.json",
+                        "update_config/versions/$targetVersionCode.json",
+                        "update_config/history/$targetVersionCode.json"
+                    )
+                    for (path in specificPaths) {
+                        try {
+                            val url = "${FirebaseConfig.DATABASE_URL}$path"
+                            val request = Request.Builder().url(url).get().build()
+                            client.newCall(request).execute().use { response ->
+                                if (response.isSuccessful) {
+                                    val body = response.body?.string()
+                                    if (!body.isNullOrBlank() && body != "null" && !body.contains("\"error\"")) {
+                                        val trimmed = body.trim()
+                                        if (trimmed.startsWith("{")) {
+                                            val json = JSONObject(trimmed)
+                                            val fId = json.optString("apkFileId", json.optString("apk_file_id", json.optString("fileId", null)))
+                                            if (!fId.isNullOrBlank() && fId != "null") {
+                                                apkFileId = fId
+                                                Log.d(TAG, "Found file ID $apkFileId for target version $targetVersionCode at specific path: $path")
+                                                return@use
+                                            }
+                                        } else if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+                                            val fId = trimmed.substring(1, trimmed.length - 1)
+                                            if (fId.isNotEmpty() && fId != "null") {
+                                                apkFileId = fId
+                                                Log.d(TAG, "Found direct file ID string $apkFileId for target version $targetVersionCode at specific path: $path")
+                                                return@use
+                                            }
+                                        } else if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+                                            if (trimmed.isNotEmpty() && trimmed != "null") {
+                                                apkFileId = trimmed
+                                                Log.d(TAG, "Found plain file ID $apkFileId for target version $targetVersionCode at specific path: $path")
+                                                return@use
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed specific path check $path", e)
+                        }
+                        if (apkFileId != null) break
                     }
                 }
 
@@ -409,7 +538,7 @@ object AppUpdateManager {
     /**
      * Resolves the APK file ID, either from Firebase or by parsing the Drive shared folder HTML.
      */
-    private suspend fun resolveApkFileId(providedFileId: String?): String? = withContext(Dispatchers.IO) {
+    private suspend fun resolveApkFileId(context: Context, providedFileId: String?): String? = withContext(Dispatchers.IO) {
         if (!providedFileId.isNullOrBlank()) {
             val url = providedFileId.trim()
             if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -443,20 +572,136 @@ object AppUpdateManager {
                 if (!response.isSuccessful) return@withContext null
                 val html = response.body?.string() ?: return@withContext null
 
-                // Look for common file ID formats inside HTML
-                val patterns = listOf(
+                val targetVersion = getPendingUpdateVersion(context)
+                Log.d(TAG, "Resolving Google Drive folder. Target update version code is: $targetVersion")
+
+                // Look for pairs of (ID, Name) or (Name, ID) in HTML
+                val pairs = mutableListOf<Pair<String, String>>() // ID to Name
+                
+                // Pattern 1: ["ID", "Name.apk"]
+                val pattern1 = Regex("""["']([a-zA-Z0-9_-]{28,45})["']\s*,\s*["']([^"']+\.apk)["']""", RegexOption.IGNORE_CASE)
+                pattern1.findAll(html).forEach { match ->
+                    val id = match.groupValues[1]
+                    val name = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+                
+                // Pattern 2: ["Name.apk", "ID"]
+                val pattern2 = Regex("""["']([^"']+\.apk)["']\s*,\s*["']([a-zA-Z0-9_-]{28,45})["']""", RegexOption.IGNORE_CASE)
+                pattern2.findAll(html).forEach { match ->
+                    val name = match.groupValues[1]
+                    val id = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+
+                // Pattern 3: JSON fields
+                val jsonPattern1 = Regex("""id["']:\s*["']([a-zA-Z0-9_-]{28,45})["'].{1,150}title["']:\s*["']([^"']+\.apk)["']""", RegexOption.IGNORE_CASE)
+                jsonPattern1.findAll(html).forEach { match ->
+                    val id = match.groupValues[1]
+                    val name = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+                val jsonPattern2 = Regex("""title["']:\s*["']([^"']+\.apk)["'].{1,150}id["']:\s*["']([a-zA-Z0-9_-]{28,45})["']""", RegexOption.IGNORE_CASE)
+                jsonPattern2.findAll(html).forEach { match ->
+                    val name = match.groupValues[1]
+                    val id = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+                val jsonPattern3 = Regex("""id["']:\s*["']([a-zA-Z0-9_-]{28,45})["'].{1,150}name["']:\s*["']([^"']+\.apk)["']""", RegexOption.IGNORE_CASE)
+                jsonPattern3.findAll(html).forEach { match ->
+                    val id = match.groupValues[1]
+                    val name = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+                val jsonPattern4 = Regex("""name["']:\s*["']([^"']+\.apk)["'].{1,150}id["']:\s*["']([a-zA-Z0-9_-]{28,45})["']""", RegexOption.IGNORE_CASE)
+                jsonPattern4.findAll(html).forEach { match ->
+                    val name = match.groupValues[1]
+                    val id = match.groupValues[2]
+                    if (id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
+                        pairs.add(Pair(id, name))
+                    }
+                }
+
+                Log.d(TAG, "Parsed Google Drive file pairs: ${pairs.map { "${it.second} -> ${it.first}" }}")
+
+                // Strategy 1: Direct target version match
+                if (targetVersion > 0) {
+                    val directMatch = pairs.firstOrNull { (_, name) ->
+                        val lower = name.lowercase()
+                        lower.contains("v$targetVersion") ||
+                        lower.contains("_$targetVersion") ||
+                        lower.contains("-$targetVersion") ||
+                        lower.contains("build$targetVersion") ||
+                        lower.contains("build_$targetVersion") ||
+                        lower.contains("build-$targetVersion") ||
+                        lower.endsWith("$targetVersion.apk") ||
+                        lower.startsWith("$targetVersion")
+                    }
+                    if (directMatch != null) {
+                        Log.d(TAG, "Success! Found direct version $targetVersion match in Google Drive folder: ${directMatch.second} (ID: ${directMatch.first})")
+                        return@withContext directMatch.first
+                    }
+                }
+
+                // Strategy 2: Highest parsed version match
+                var highestParsedVersion = -1
+                var highestParsedId: String? = null
+                var highestParsedName: String? = null
+                
+                for (pair in pairs) {
+                    val name = pair.second
+                    val regex = Regex("""(?:v|_|-|build|version)(\d+)""", RegexOption.IGNORE_CASE)
+                    val matchResult = regex.find(name)
+                    var versionNum = matchResult?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    
+                    if (versionNum == null) {
+                        val fallbackRegex = Regex("""(\d+)\.apk""", RegexOption.IGNORE_CASE)
+                        val fallbackMatch = fallbackRegex.find(name)
+                        versionNum = fallbackMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    }
+                    
+                    if (versionNum != null && versionNum > highestParsedVersion) {
+                        highestParsedVersion = versionNum
+                        highestParsedId = pair.first
+                        highestParsedName = name
+                    }
+                }
+                
+                if (highestParsedId != null && highestParsedVersion > 0) {
+                    Log.d(TAG, "Success! Selected highest parsed version $highestParsedVersion: $highestParsedName (ID: $highestParsedId)")
+                    return@withContext highestParsedId
+                }
+
+                // Strategy 3: Falling back to first parsed pair
+                if (pairs.isNotEmpty()) {
+                    val fallback = pairs.first()
+                    Log.d(TAG, "No version-specific match. Falling back to first parsed file: ${fallback.second} (ID: ${fallback.first})")
+                    return@withContext fallback.first
+                }
+
+                // Strategy 4: Legacy fallback matching raw IDs
+                val legacyPatterns = listOf(
                     Regex("""file/d/([a-zA-Z0-9_-]{28,45})"""),
                     Regex("""open\?id=([a-zA-Z0-9_-]{28,45})"""),
                     Regex("""id\\":\\"([a-zA-Z0-9_-]{28,45})\\""""),
                     Regex("""id":"([a-zA-Z0-9_-]{28,45})""")
                 )
-
-                for (pattern in patterns) {
+                for (pattern in legacyPatterns) {
                     val matches = pattern.findAll(html)
                     for (match in matches) {
                         val id = match.groupValues.getOrNull(1)
                         if (id != null && id != DEFAULT_FOLDER_ID && id.startsWith("1")) {
-                            Log.d(TAG, "Found resolved Google Drive file ID: $id")
+                            Log.d(TAG, "Found legacy raw Google Drive file ID: $id")
                             return@withContext id
                         }
                     }
@@ -531,7 +776,7 @@ object AppUpdateManager {
                 }
 
                 // 2. Resolve File ID
-                val fileId = resolveApkFileId(providedFileId)
+                val fileId = resolveApkFileId(context, providedFileId)
                 if (fileId.isNullOrBlank()) {
                     val errMsg = "Failed to update: No APK file is available in the Google Drive folder. Please verify that a compatible APK is uploaded to the shared folder (ID: $DEFAULT_FOLDER_ID) or specify the File ID in Firebase. Pre-update data was fully secured."
                     _updateStatus.value = UpdateStatus.Error(errMsg)
@@ -726,12 +971,29 @@ object AppUpdateManager {
                 }
 
                 // Check version is strictly greater before proceeding to install
-                if (!isUpdateVersionGreater(context, apkFile)) {
-                    Log.w(TAG, "Downloaded APK version code is not greater than current version.")
+                val currentCode = getCurrentVersionCode(context)
+                var downloadedCode = -1
+                val packageInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+                if (packageInfo != null) {
+                    downloadedCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        packageInfo.longVersionCode.toInt()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        packageInfo.versionCode
+                    }
+                }
+
+                if (downloadedCode <= currentCode) {
+                    Log.w(TAG, "Downloaded APK version code ($downloadedCode) is not greater than current version ($currentCode).")
                     if (apkFile.exists()) {
                         apkFile.delete()
                     }
-                    _updateStatus.value = UpdateStatus.Error("Failed to update: Downloaded APK version is not greater than your current version. Pre-update data remains fully secured.")
+                    val detailMsg = if (downloadedCode > 0) {
+                        "Failed to update: The downloaded APK actually has version code $downloadedCode (same as or older than your current running version $currentCode), even though Firebase was set to version 5. This happens when the Firebase version config is bumped to 5, but the old APK file (version $downloadedCode) was not replaced on your Google Drive or GitHub releases with the newly built APK. Please upload the newly compiled APK (with versionCode 5) and try again."
+                    } else {
+                        "Failed to update: Downloaded APK version is not greater than your current version. Pre-update data remains fully secured."
+                    }
+                    _updateStatus.value = UpdateStatus.Error(detailMsg)
                     showCompletionNotification(context, "Update Ignored", "Downloaded version is not newer.", false)
                     return@withContext
                 }

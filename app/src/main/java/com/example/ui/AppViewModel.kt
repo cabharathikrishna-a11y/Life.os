@@ -3712,6 +3712,20 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         }
     }
 
+    fun backupAllDataToGoogleDrive(context: android.content.Context, onAuthResolutionRequired: (android.content.Intent) -> Unit, onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val (success, msg) = com.example.util.GoogleDriveSyncManager.backupAllAppData(context, repository.db, onAuthResolutionRequired)
+            onComplete(success, msg)
+        }
+    }
+
+    fun restoreAllDataFromGoogleDrive(context: android.content.Context, onAuthResolutionRequired: (android.content.Intent) -> Unit, onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val (success, msg) = com.example.util.GoogleDriveSyncManager.restoreAllAppData(context, repository.db, onAuthResolutionRequired)
+            onComplete(success, msg)
+        }
+    }
+
     fun generateImmediateSummaryMsg() {
         _chatbotMessages.value = emptyList()
     }

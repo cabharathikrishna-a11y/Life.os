@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -51,6 +54,28 @@ fun FileExplorerView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
     val contacts by viewModel.contacts.collectAsState()
     
     var longPressedFile by remember { mutableStateOf<ExplorerFile?>(null) }
+
+    // Google Drive Integration State
+    val googleAccount = remember { com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context) }
+    var hasPermission by remember { mutableStateOf(com.example.util.GoogleDriveSyncManager.hasDrivePermission(context)) }
+    var isOperating by remember { mutableStateOf(false) }
+    var syncMessage by remember { mutableStateOf<String?>(null) }
+
+    val prefs = remember { context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE) }
+    var lastSyncTs by remember { mutableStateOf(prefs.getLong("gd_all_last_sync_timestamp", 0L)) }
+
+    val scope = rememberCoroutineScope()
+
+    val authResolutionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        hasPermission = com.example.util.GoogleDriveSyncManager.hasDrivePermission(context)
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            syncMessage = "Google Drive successfully authorized! Tap Backup or Restore to align your app data."
+        } else {
+            syncMessage = "Google Drive authorization declined."
+        }
+    }
     
     // 1. Gather files from Journal Entries
     val journalFiles = remember(journalEntries) {
@@ -240,6 +265,197 @@ fun FileExplorerView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        // Google Drive Integration Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, WaterBlue.copy(alpha = 0.2f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cloud,
+                            contentDescription = "Drive Integration",
+                            tint = WaterBlue,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Google Drive Storage",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = if (hasPermission) (googleAccount?.email ?: "Integrated") else "Not integrated",
+                                color = if (hasPermission) WaterBlue else Color.Gray,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    if (!hasPermission) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    com.example.util.GoogleDriveSyncManager.getAccessToken(context) { intent ->
+                                        authResolutionLauncher.launch(intent)
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp).testTag("connect_drive_btn")
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.Black)
+                                Text("INTEGRATE", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xFF1B5E20), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "INTEGRATED",
+                                color = Color.Green,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "By default, the File Explorer and application databases are integrated with Google Drive. All journal attachments, task uploads, and contacts files sync securely to your private AppData sandbox.",
+                    color = Color.LightGray,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+
+                if (lastSyncTs > 0L) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Last Synced: " + java.text.SimpleDateFormat("dd MMM yyyy, hh:mm:ss a", java.util.Locale.getDefault()).format(java.util.Date(lastSyncTs)),
+                        color = Color.Gray,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                if (hasPermission) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (isOperating) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(color = WaterBlue, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Syncing with Google Drive Cloud...", color = Color.LightGray, fontSize = 11.sp)
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    isOperating = true
+                                    viewModel.backupAllDataToGoogleDrive(context, { intent ->
+                                        authResolutionLauncher.launch(intent)
+                                    }) { success, msg ->
+                                        isOperating = false
+                                        syncMessage = msg
+                                        if (success) {
+                                            lastSyncTs = prefs.getLong("gd_all_last_sync_timestamp", 0L)
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF161618)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, WaterBlue.copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(38.dp).testTag("drive_backup_btn")
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp), tint = WaterBlue)
+                                    Text("BACKUP NOW", color = WaterBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    isOperating = true
+                                    viewModel.restoreAllDataFromGoogleDrive(context, { intent ->
+                                        authResolutionLauncher.launch(intent)
+                                    }) { success, msg ->
+                                        isOperating = false
+                                        syncMessage = msg
+                                        if (success) {
+                                            lastSyncTs = prefs.getLong("gd_all_last_sync_timestamp", 0L)
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF161618)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(38.dp).testTag("drive_restore_btn")
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.LightGray)
+                                    Text("RESTORE DATA", color = Color.LightGray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (syncMessage != null) {
+            AlertDialog(
+                onDismissRequest = { syncMessage = null },
+                title = { Text("Cloud Sync", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = { Text(syncMessage!!, color = Color.LightGray, fontSize = 13.sp) },
+                confirmButton = {
+                    TextButton(onClick = { syncMessage = null }) {
+                        Text("OK", color = WaterBlue, fontWeight = FontWeight.Bold)
+                    }
+                },
+                containerColor = Color(0xFF161618),
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
         // Filter bar using chips
         Row(
             modifier = Modifier
