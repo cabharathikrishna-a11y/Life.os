@@ -2007,6 +2007,36 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     private val _calendarSyncStatus = MutableStateFlow("Ready")
     val calendarSyncStatus: StateFlow<String> = _calendarSyncStatus.asStateFlow()
 
+    // Google Contacts Live Sync status
+    private val _googleContactsSyncStatus = MutableStateFlow("Ready")
+    val googleContactsSyncStatus: StateFlow<String> = _googleContactsSyncStatus.asStateFlow()
+
+    fun syncGoogleContacts(context: android.content.Context, onAuthRequired: (android.content.Intent) -> Unit = {}) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _googleContactsSyncStatus.value = "Syncing..."
+            try {
+                val result = com.example.util.GoogleContactsSyncManager.syncContacts(context, onAuthRequired)
+                if (result.first) {
+                    _googleContactsSyncStatus.value = "Sync successful!"
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    _googleContactsSyncStatus.value = "Sync failed: ${result.second}"
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AppViewModel", "Google Contacts sync failed", e)
+                _googleContactsSyncStatus.value = "Sync failed: ${e.localizedMessage}"
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Sync failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     fun syncGoogleCalendar(context: android.content.Context) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _calendarSyncStatus.value = "Syncing..."

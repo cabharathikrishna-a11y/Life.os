@@ -112,7 +112,8 @@ data class Contact(
     val additionalDatesJson: String = "",
     val folder: String = "All",
     val attachedFilesJson: String = "",
-    val systemContactId: Long? = null
+    val systemContactId: Long? = null,
+    val googleContactId: String? = null
 )
 
 @Entity(tableName = "app_files")
@@ -440,7 +441,7 @@ interface FinanceCategoryDao {
         FinanceTransaction::class,
         FinanceCategory::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

@@ -218,6 +218,22 @@ fun ContactsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
         }
     }
 
+    val authResolutionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            viewModel.syncGoogleContacts(context) { intent ->
+                // Do not loop infinitely if second auth fails
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.syncGoogleContacts(context) { intent ->
+            authResolutionLauncher.launch(intent)
+        }
+    }
+
     // Main screen controller
     when (screenState) {
         ContactScreen.LIST -> {
@@ -261,6 +277,32 @@ fun ContactsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                 fontSize = 18.sp,
                                 modifier = Modifier.weight(1f)
                             )
+
+                            val googleContactsSyncStatus by viewModel.googleContactsSyncStatus.collectAsState()
+
+                            if (googleContactsSyncStatus == "Syncing...") {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp).padding(end = 12.dp),
+                                    color = WaterBlue,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                IconButton(
+                                    onClick = {
+                                        viewModel.syncGoogleContacts(context) { intent ->
+                                            authResolutionLauncher.launch(intent)
+                                        }
+                                    },
+                                    modifier = Modifier.padding(end = 8.dp).size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Sync,
+                                        contentDescription = "Sync Google Contacts",
+                                        tint = WaterBlue,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
 
                             IconButton(
                                 onClick = {
