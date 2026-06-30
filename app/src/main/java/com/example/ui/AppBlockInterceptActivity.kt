@@ -1,0 +1,267 @@
+package com.example.ui
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.util.AppBlockHelper
+
+class AppBlockInterceptActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        
+        val interceptPkg = intent.getStringExtra("INTERCEPTED_PACKAGE") ?: "com.instagram.android"
+        val isLimitBlock = intent.getBooleanExtra("IS_LIMIT_BLOCK", false)
+        
+        setContent {
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    background = Color.Black.copy(alpha = 0.6f)
+                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.65f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val appLabel = remember(interceptPkg) {
+                        try {
+                            val pm = packageManager
+                            val info = pm.getApplicationInfo(interceptPkg, 0)
+                            pm.getApplicationLabel(info).toString()
+                        } catch (e: Exception) {
+                            interceptPkg.substringAfterLast('.')
+                        }
+                    }
+                    var customMinutes by remember { mutableStateOf(5f) }
+                    
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .wrapContentHeight(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF1E1E20),
+                        tonalElevation = 8.dp
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(24.dp)
+                                .fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Session Warning Icon",
+                                    tint = if (isLimitBlock) Color(0xFFFF5252) else Color(0xFF5AB9EA),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Text(
+                                    text = if (isLimitBlock) "LIMIT EXCEEDED" else "LIFE OS APP MONITOR",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                            
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = if (isLimitBlock) {
+                                        "Daily screen limit reached for $appLabel."
+                                    } else {
+                                        "You are attempting to open $appLabel."
+                                    },
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (isLimitBlock) {
+                                        "You have used all your allocated usage for today. Access is strictly disabled to cultivate focus.\n\nSelecting 'Close App' will safely return to home."
+                                    } else {
+                                        "Please allocate your session time usage below. Once the duration is over, Life OS will automatically block access.\n\nSelecting 'Close App' will safely exit and return to home."
+                                    },
+                                    color = Color.LightGray,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                            
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                if (!isLimitBlock) {
+                                    Text(
+                                        text = "⚡ QUICK PRESETS",
+                                        color = Color.LightGray,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 2.dp)
+                                    )
+                                    
+                                    // Predefined presets (including quick 1 and 2 mins for testing)
+                                    listOf(1, 2, 5, 15).forEach { mins ->
+                                        Button(
+                                            onClick = {
+                                                AppBlockHelper.startTemporarySession(applicationContext, interceptPkg, mins)
+                                                try {
+                                                    val launchIntent = packageManager.getLaunchIntentForPackage(interceptPkg)
+                                                    if (launchIntent != null) {
+                                                        startActivity(launchIntent)
+                                                    }
+                                                } catch (e: Exception) {
+                                                    android.widget.Toast.makeText(applicationContext, "Session set", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                                finish()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFF5AB9EA),
+                                                contentColor = Color.Black
+                                            ),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(42.dp)
+                                        ) {
+                                            Text(
+                                                text = "Use for $mins ${if (mins == 1) "minute" else "minutes"}",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "⚙️ CUSTOM FOCUS TIMER",
+                                        color = Color.LightGray,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Duration:",
+                                            color = Color.White,
+                                            fontSize = 12.sp
+                                        )
+                                        Text(
+                                            text = "${customMinutes.toInt()} mins",
+                                            color = Color(0xFF5AB9EA),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Black
+                                        )
+                                    }
+                                    
+                                    Slider(
+                                        value = customMinutes,
+                                        onValueChange = { customMinutes = it.coerceIn(1f, 60f) },
+                                        valueRange = 1f..60f,
+                                        steps = 59,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFF5AB9EA),
+                                            activeTrackColor = Color(0xFF5AB9EA),
+                                            inactiveTrackColor = Color(0xFF2B2B30)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    
+                                    Button(
+                                        onClick = {
+                                            val mins = customMinutes.toInt()
+                                            AppBlockHelper.startTemporarySession(applicationContext, interceptPkg, mins)
+                                            try {
+                                                val launchIntent = packageManager.getLaunchIntentForPackage(interceptPkg)
+                                                if (launchIntent != null) {
+                                                    startActivity(launchIntent)
+                                                }
+                                            } catch (e: Exception) {
+                                                android.widget.Toast.makeText(applicationContext, "Session set", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                            finish()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF5AB9EA).copy(alpha = 0.15f),
+                                            contentColor = Color(0xFF5AB9EA)
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF5AB9EA)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(42.dp)
+                                    ) {
+                                        Text(
+                                            text = "Start Custom ${customMinutes.toInt()} Min Session",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                                
+                                Spacer(modifier = Modifier.height(4.dp))
+                                
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                                                addCategory(Intent.CATEGORY_HOME)
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
+                                            startActivity(homeIntent)
+                                        } catch (e: Exception) {}
+                                        finish()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFFF5252),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(44.dp)
+                                ) {
+                                    Text(
+                                        text = "Close App",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
