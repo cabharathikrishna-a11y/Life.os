@@ -51,7 +51,8 @@ data class Habit(
                 childColumns = ["habitId"],
                 onDelete = ForeignKey.CASCADE
             )
-        ])
+        ],
+        indices = [Index(value = ["habitId"])])
 data class HabitCompletion(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val habitId: Int,

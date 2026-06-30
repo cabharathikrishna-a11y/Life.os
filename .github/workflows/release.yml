@@ -36,9 +36,19 @@ jobs:
       run: |
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > debug.keystore
 
-    # We pass the cloud build number directly into the compilation step automatically
+    - name: Get Version Info
+      id: get_version
+      run: |
+        VERSION_CODE=$(grep -E 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | sed -E 's/.*versionCode\s*=\s*([0-9]+).*/\1/')
+        VERSION_NAME=$(grep -E 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/')
+        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+        echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+
+    # We compile the automated release APK using the project's native versionCode and versionName
     - name: Compile Automated Release APK
-      run: ./gradlew assembleRelease -PversionCode=${{ github.run_number }} -PversionName="1.0.${{ github.run_number }}"
+      run: ./gradlew assembleRelease
 
     - name: Distribute Release APK to Firebase App Distribution
       env:
@@ -52,7 +62,7 @@ jobs:
         export GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json
         
         CMD="npx firebase-tools appdistribution:distribute app/build/outputs/apk/release/app-release.apk --app \"$FIREBASE_APP_ID\""
-        CMD="$CMD --release-notes \"Automated release build #${{ github.run_number }} uploaded via GitHub Actions.\""
+        CMD="$CMD --release-notes \"Automated release build #${{ github.run_number }} (Version Code: ${{ env.VERSION_CODE }}) uploaded via GitHub Actions.\""
         
         if [ -n "$FIREBASE_GROUPS" ]; then
           CMD="$CMD --groups \"$FIREBASE_GROUPS\""
@@ -67,9 +77,24 @@ jobs:
     - name: Generate Public GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v1.0.${{ github.run_number }}
-        name: Release v1.0.${{ github.run_number }}
+        tag_name: v1.0.${{ env.VERSION_CODE }}
+        name: Release v1.0.${{ env.VERSION_CODE }}
         body: |
           Automated build updates compiled successfully via GitHub Actions.
-          Tracking Identifier: Build #${{ github.run_number }}
+          Tracking Identifier: Build #${{ github.run_number }} (Version Code: ${{ env.VERSION_CODE }}, Version Name: ${{ env.VERSION_NAME }})
         files: app/build/outputs/apk/release/app-release.apk
+
+    - name: Update Firebase Realtime Database Update Config
+      run: |
+        VERSION_CODE=${{ env.VERSION_CODE }}
+        APK_URL="https://github.com/cabharathikrishna/Life.os/releases/download/v1.0.$VERSION_CODE/app-release.apk"
+        
+        # Update update_config.json
+        curl -X PUT -H "Content-Type: application/json" \
+          -d "{\"versionId\": $VERSION_CODE, \"apkFileId\": \"$APK_URL\"}" \
+          "https://cloud-storage-f8ab3-default-rtdb.asia-southeast1.firebasedatabase.app/update_config.json"
+          
+        # Update versionId.json
+        curl -X PUT -H "Content-Type: application/json" \
+          -d "$VERSION_CODE" \
+          "https://cloud-storage-f8ab3-default-rtdb.asia-southeast1.firebasedatabase.app/versionId.json"
