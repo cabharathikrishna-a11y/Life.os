@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -151,6 +152,171 @@ fun SettingsFileExplorerPage(
                                 )
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Google Drive File Synchronization Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0C0C0C)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = WaterBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Google Drive Cloud Save Settings",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Configure preferred Google account and target directory for file backups & attachments.",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+
+                val prefs = remember { context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE) }
+                var fileBackupAccount by remember { mutableStateOf(prefs.getString("selected_file_backup_account", "cabharathikrishna@gmail.com")) }
+                var fileBackupDir by remember { mutableStateOf(prefs.getString("selected_file_backup_dir", "Root Directory (/)")) }
+                var customDirInput by remember { mutableStateOf(prefs.getString("custom_file_backup_dir_path", "")) }
+
+                var accountDropdownExpanded by remember { mutableStateOf(false) }
+                var dirDropdownExpanded by remember { mutableStateOf(false) }
+
+                // Google Account selection
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Connected Google Account", color = Color.Gray, fontSize = 11.sp)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .clickable { accountDropdownExpanded = true }
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = fileBackupAccount ?: "No Account Chosen",
+                                color = if (fileBackupAccount != null) Color.White else Color.Gray,
+                                fontSize = 13.sp
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Dropdown",
+                                tint = Color.Gray
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = accountDropdownExpanded,
+                            onDismissRequest = { accountDropdownExpanded = false },
+                            modifier = Modifier.background(Color(0xFF1B1B22))
+                        ) {
+                            val availableAccounts = listOf("cabharathikrishna@gmail.com", "workspace.office@gmail.com", "personal.cloud@gmail.com", "Add new Google account...")
+                            availableAccounts.forEach { acc ->
+                                DropdownMenuItem(
+                                    text = { Text(acc, color = Color.White) },
+                                    onClick = {
+                                        if (acc == "Add new Google account...") {
+                                            Toast.makeText(context, "Opening Google Account setup...", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            fileBackupAccount = acc
+                                            prefs.edit().putString("selected_file_backup_account", acc).apply()
+                                            Toast.makeText(context, "Google Account for Files updated!", Toast.LENGTH_SHORT).show()
+                                        }
+                                        accountDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Google Drive folder selection
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Target Google Drive Folder", color = Color.Gray, fontSize = 11.sp)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .clickable { dirDropdownExpanded = true }
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = fileBackupDir ?: "Root Directory (/)",
+                                color = if (fileBackupDir != null) Color.White else Color.Gray,
+                                fontSize = 13.sp
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Dropdown",
+                                tint = Color.Gray
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = dirDropdownExpanded,
+                            onDismissRequest = { dirDropdownExpanded = false },
+                            modifier = Modifier.background(Color(0xFF1B1B22))
+                        ) {
+                            val directories = listOf("Root Directory (/)", "LifeOS_Files", "Personal_Daily_Archive", "Work_Cloud_Backup", "Custom Path...")
+                            directories.forEach { dir ->
+                                DropdownMenuItem(
+                                    text = { Text(dir, color = Color.White) },
+                                    onClick = {
+                                        fileBackupDir = dir
+                                        prefs.edit().putString("selected_file_backup_dir", dir).apply()
+                                        dirDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (fileBackupDir == "Custom Path...") {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Custom Folder Path", color = Color.Gray, fontSize = 11.sp)
+                        OutlinedTextField(
+                            value = customDirInput ?: "",
+                            onValueChange = { newValue ->
+                                customDirInput = newValue
+                                prefs.edit().putString("custom_file_backup_dir_path", newValue).apply()
+                            },
+                            placeholder = { Text("e.g. Backups/Attachments/2026", color = Color.Gray) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = WaterBlue,
+                                unfocusedBorderColor = Color.Gray,
+                                cursorColor = WaterBlue
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }

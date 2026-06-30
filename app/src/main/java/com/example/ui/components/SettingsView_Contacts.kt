@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -175,6 +176,174 @@ fun SettingsContactsPage(
                         fontSize = 10.sp,
                         lineHeight = 14.sp
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Google Account and Cloud Settings Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0C0C0C)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Cloud Google Contacts Sync",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = "Connect a Google account to save, sync and backup contacts with Google Contacts Cloud services.",
+                        color = Color.LightGray,
+                        fontSize = 11.sp
+                    )
+
+                    val prefs = remember { context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE) }
+                    var contactsAccount by remember { mutableStateOf(prefs.getString("selected_contacts_account", "cabharathikrishna@gmail.com")) }
+                    var contactsGroup by remember { mutableStateOf(prefs.getString("selected_contacts_group", "LifeOS Contacts Group")) }
+                    var autoCloudBackup by remember { mutableStateOf(prefs.getBoolean("auto_cloud_contacts_backup", true)) }
+
+                    var accountDropdownExpanded by remember { mutableStateOf(false) }
+                    var groupDropdownExpanded by remember { mutableStateOf(false) }
+
+                    // Google Account Selection
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Google Account for Saving Contacts", color = Color.Gray, fontSize = 11.sp)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .clickable { accountDropdownExpanded = true }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = contactsAccount ?: "No Google Account connected",
+                                    color = if (contactsAccount != null) Color.White else Color.Gray,
+                                    fontSize = 13.sp
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Dropdown",
+                                    tint = Color.Gray
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = accountDropdownExpanded,
+                                onDismissRequest = { accountDropdownExpanded = false },
+                                modifier = Modifier.background(Color(0xFF1B1B22))
+                            ) {
+                                val availableAccounts = listOf("cabharathikrishna@gmail.com", "workspace.office@gmail.com", "personal.cloud@gmail.com", "Add new Google account...")
+                                availableAccounts.forEach { acc ->
+                                    DropdownMenuItem(
+                                        text = { Text(acc, color = Color.White) },
+                                        onClick = {
+                                            if (acc == "Add new Google account...") {
+                                                Toast.makeText(context, "Redirecting to Google Sign-in...", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                contactsAccount = acc
+                                                prefs.edit().putString("selected_contacts_account", acc).apply()
+                                                Toast.makeText(context, "Saved Google Account for Contacts!", Toast.LENGTH_SHORT).show()
+                                            }
+                                            accountDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Contacts Group Selection
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Target Contacts Directory / Label", color = Color.Gray, fontSize = 11.sp)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .clickable { groupDropdownExpanded = true }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = contactsGroup ?: "Default My Contacts",
+                                    color = if (contactsGroup != null) Color.White else Color.Gray,
+                                    fontSize = 13.sp
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Dropdown",
+                                    tint = Color.Gray
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = groupDropdownExpanded,
+                                onDismissRequest = { groupDropdownExpanded = false },
+                                modifier = Modifier.background(Color(0xFF1B1B22))
+                            ) {
+                                val groups = listOf("LifeOS Contacts Group", "My Contacts", "Work Contacts", "Family & Friends Label")
+                                groups.forEach { grp ->
+                                    DropdownMenuItem(
+                                        text = { Text(grp, color = Color.White) },
+                                        onClick = {
+                                            contactsGroup = grp
+                                            prefs.edit().putString("selected_contacts_group", grp).apply()
+                                            groupDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Auto cloud backup toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .padding(12.dp)
+                            .clickable {
+                                autoCloudBackup = !autoCloudBackup
+                                prefs.edit().putBoolean("auto_cloud_contacts_backup", autoCloudBackup).apply()
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Auto Sync to Google Drive",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = "Automatically upload contact backups to connected Google account",
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = autoCloudBackup,
+                            onCheckedChange = { value ->
+                                autoCloudBackup = value
+                                prefs.edit().putBoolean("auto_cloud_contacts_backup", value).apply()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = WaterBlue,
+                                checkedTrackColor = WaterBlue.copy(alpha = 0.5f)
+                            )
+                        )
+                    }
                 }
             }
         }

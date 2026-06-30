@@ -69,6 +69,24 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Life OS custom deep links: lifeos://<page> -->
+            <intent-filter android:label="Life OS Deep Link">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lifeos" />
+            </intent-filter>
+
+            <!-- Life OS HTTP/S deep links: https://lifeos.app/<page> -->
+            <intent-filter android:label="Life OS Web Link">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="lifeos.app" />
+            </intent-filter>
         </activity>
 
         <activity

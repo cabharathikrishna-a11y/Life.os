@@ -285,6 +285,13 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                         ) { activePage = 15 }
                         HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp, end = 16.dp))
                         SettingsRowItem(
+                            title = "16. DEEP LINKS & SHORTCUTS",
+                            subtitle = "Copy application deep links, automation URI routes & assets",
+                            icon = Icons.Default.Share,
+                            iconBgColor = Color(0xFF03A9F4)
+                        ) { activePage = 18 }
+                        HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp, end = 16.dp))
+                        SettingsRowItem(
                             title = "LOGOUT",
                             subtitle = "Sign out from the current online account securely",
                             icon = Icons.Default.ExitToApp,
@@ -390,6 +397,8 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                 LifeOSBackupSection(viewModel = viewModel)
                 Spacer(modifier = Modifier.height(16.dp))
                 GoogleDriveSyncSection(viewModel = viewModel)
+                Spacer(modifier = Modifier.height(16.dp))
+                FirebaseConfigurationSection(viewModel = viewModel)
             }
         }
 
@@ -429,6 +438,13 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
 
         17 -> {
             SettingsBackgroundDiagnosticsPage(
+                viewModel = viewModel,
+                onBack = { activePage = 0 }
+            )
+        }
+
+        18 -> {
+            SettingsDeepLinksPage(
                 viewModel = viewModel,
                 onBack = { activePage = 0 }
             )

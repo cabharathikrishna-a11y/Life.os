@@ -298,7 +298,7 @@ object AppUpdateManager {
 
                 for (path in pathsToTry) {
                     try {
-                        val url = "${FirebaseConfig.DATABASE_URL}$path"
+                        val url = "${com.example.api.FirebaseClient.activeUrl}$path"
                         val request = Request.Builder().url(url).get().build()
                         client.newCall(request).execute().use { response ->
                             if (response.isSuccessful) {
@@ -342,7 +342,7 @@ object AppUpdateManager {
 
                 // If update_config was empty or failed, try fetching versionId.json directly
                 if (targetVersionCode == -1) {
-                    val fallbackUrl = "${FirebaseConfig.DATABASE_URL}versionId.json"
+                    val fallbackUrl = "${com.example.api.FirebaseClient.activeUrl}versionId.json"
                     val fallbackRequest = Request.Builder().url(fallbackUrl).get().build()
                     try {
                         client.newCall(fallbackRequest).execute().use { response ->
@@ -378,7 +378,7 @@ object AppUpdateManager {
                     )
                     for (path in specificPaths) {
                         try {
-                            val url = "${FirebaseConfig.DATABASE_URL}$path"
+                            val url = "${com.example.api.FirebaseClient.activeUrl}$path"
                             val request = Request.Builder().url(url).get().build()
                             client.newCall(request).execute().use { response ->
                                 if (response.isSuccessful) {
@@ -1092,7 +1092,7 @@ object AppUpdateManager {
      */
     suspend fun publishUpdateConfig(versionId: Int, apkFileId: String?): Boolean = withContext(Dispatchers.IO) {
         try {
-            val url = "${FirebaseConfig.DATABASE_URL}update_config.json"
+            val url = "${com.example.api.FirebaseClient.activeUrl}update_config.json"
             val json = JSONObject()
             json.put("versionId", versionId)
             json.put("apkFileId", apkFileId ?: JSONObject.NULL)
@@ -1105,7 +1105,7 @@ object AppUpdateManager {
                     
                     // Also update fallback versionId.json
                     try {
-                        val fallbackUrl = "${FirebaseConfig.DATABASE_URL}versionId.json"
+                        val fallbackUrl = "${com.example.api.FirebaseClient.activeUrl}versionId.json"
                         val fallbackBody = versionId.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                         val fallbackReq = Request.Builder().url(fallbackUrl).put(fallbackBody).build()
                         client.newCall(fallbackReq).execute().close()

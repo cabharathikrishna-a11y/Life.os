@@ -70,6 +70,10 @@ class MainActivity : ComponentActivity() {
             
             // Start the persistent keep alive daemon service if enabled
             val prefs = getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+            val customDbUrl = prefs.getString("custom_firebase_db_url", null)
+            if (!customDbUrl.isNullOrBlank()) {
+                com.example.api.FirebaseClient.activeUrl = customDbUrl
+            }
             if (prefs.getBoolean("keep_notification_enabled", true)) {
                 com.example.service.KeepAliveService.start(applicationContext)
             }
@@ -128,6 +132,7 @@ class MainActivity : ComponentActivity() {
             // Handle auto-navigation if launched with SHOW_TIMER_PAGE parameter
             checkTimerNavigation(intent)
             checkAppBlockInterceptions(intent)
+            handleDeepLink(intent)
         } catch (e: Throwable) {
             e.printStackTrace()
             startupException = e
@@ -1193,6 +1198,87 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         checkTimerNavigation(intent)
         checkAppBlockInterceptions(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        val uri = intent.data
+        if (uri == null) return
+        
+        android.util.Log.i("MainActivity", "handleDeepLink: action=$action, uri=$uri")
+        try {
+            val scheme = uri.scheme
+            val host = uri.host
+            if (scheme == "lifeos" || (host == "lifeos.app" && (scheme == "http" || scheme == "https"))) {
+                val path = uri.path
+                val targetHost = if (scheme == "lifeos") host else uri.lastPathSegment
+                
+                android.util.Log.i("MainActivity", "Deep Link routing: targetHost=$targetHost, path=$path")
+                
+                when (targetHost) {
+                    "login" -> viewModel.navigateTo(Screen.LOGIN)
+                    "profile_setup" -> viewModel.navigateTo(Screen.PROFILE_SETUP)
+                    "onboarding" -> viewModel.navigateTo(Screen.PERMISSION_ONBOARDING)
+                    "ai_chat" -> viewModel.navigateTo(Screen.DEEPA_AI)
+                    "search" -> viewModel.navigateTo(Screen.SEARCH)
+                    "tasks" -> viewModel.navigateTo(Screen.TASKS)
+                    "calendar" -> viewModel.navigateTo(Screen.CALENDAR)
+                    "timer" -> viewModel.navigateTo(Screen.TIMER)
+                    "habits" -> viewModel.navigateTo(Screen.HABITS)
+                    "countdown" -> viewModel.navigateTo(Screen.COUNTDOWN)
+                    "journal" -> viewModel.navigateTo(Screen.JOURNAL)
+                    "contacts" -> viewModel.navigateTo(Screen.CONTACTS)
+                    "file_explorer" -> viewModel.navigateTo(Screen.FILE_EXPLORER)
+                    "finances", "financials" -> viewModel.navigateTo(Screen.FINANCES)
+                    "analytics" -> viewModel.navigateTo(Screen.ANALYTICS)
+                    "settings" -> viewModel.navigateTo(Screen.SETTINGS)
+                    "action" -> {
+                        when (path) {
+                            "/sync_calendar" -> viewModel.syncGoogleCalendar(applicationContext)
+                            "/backup_drive" -> {
+                                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    com.example.util.GoogleDriveSyncManager.backupFocusData(applicationContext)
+                                }
+                            }
+                            "/force_contacts_sync" -> viewModel.forceSyncAllContactsToDevice()
+                            "/check_updates" -> {
+                                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    com.example.util.AppUpdateManager.checkForUpdates(applicationContext, manualCheck = true)
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        // If path segments contain the screen name (e.g. /tasks or /calendar)
+                        val segments = uri.pathSegments
+                        if (segments.isNotEmpty()) {
+                            when (segments.firstOrNull()?.lowercase()) {
+                                "login" -> viewModel.navigateTo(Screen.LOGIN)
+                                "profile_setup" -> viewModel.navigateTo(Screen.PROFILE_SETUP)
+                                "onboarding" -> viewModel.navigateTo(Screen.PERMISSION_ONBOARDING)
+                                "ai_chat" -> viewModel.navigateTo(Screen.DEEPA_AI)
+                                "search" -> viewModel.navigateTo(Screen.SEARCH)
+                                "tasks" -> viewModel.navigateTo(Screen.TASKS)
+                                "calendar" -> viewModel.navigateTo(Screen.CALENDAR)
+                                "timer" -> viewModel.navigateTo(Screen.TIMER)
+                                "habits" -> viewModel.navigateTo(Screen.HABITS)
+                                "countdown" -> viewModel.navigateTo(Screen.COUNTDOWN)
+                                "journal" -> viewModel.navigateTo(Screen.JOURNAL)
+                                "contacts" -> viewModel.navigateTo(Screen.CONTACTS)
+                                "file_explorer" -> viewModel.navigateTo(Screen.FILE_EXPLORER)
+                                "finances", "financials" -> viewModel.navigateTo(Screen.FINANCES)
+                                "analytics" -> viewModel.navigateTo(Screen.ANALYTICS)
+                                "settings" -> viewModel.navigateTo(Screen.SETTINGS)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error parsing deep link", e)
+        }
     }
 
     private fun checkTimerNavigation(intent: Intent?) {

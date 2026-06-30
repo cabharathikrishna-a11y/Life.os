@@ -111,11 +111,29 @@ object FirebaseClient {
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    val api: FirebaseApi by lazy {
-        Retrofit.Builder()
-            .baseUrl(FirebaseConfig.DATABASE_URL)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .build()
-            .create(FirebaseApi::class.java)
-    }
+    private var cachedApi: FirebaseApi? = null
+    private var cachedUrl: String? = null
+
+    val api: FirebaseApi
+        get() {
+            val url = activeUrl
+            synchronized(this) {
+                if (cachedApi == null || cachedUrl != url) {
+                    cachedUrl = url
+                    cachedApi = Retrofit.Builder()
+                        .baseUrl(url)
+                        .addConverterFactory(MoshiConverterFactory.create(moshi))
+                        .build()
+                        .create(FirebaseApi::class.java)
+                }
+                return cachedApi!!
+            }
+        }
+
+    @Volatile
+    var activeUrl: String = FirebaseConfig.DATABASE_URL
+        set(value) {
+            val sanitized = if (value.endsWith("/")) value else "$value/"
+            field = sanitized
+        }
 }

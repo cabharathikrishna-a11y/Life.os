@@ -2,9 +2,11 @@ package com.example.ui.components
 
 import android.content.Intent
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -660,6 +662,227 @@ fun GoogleDriveSyncSection(viewModel: AppViewModel) {
                     fontWeight = FontWeight.Medium,
                     lineHeight = 14.sp
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun FirebaseConfigurationSection(viewModel: AppViewModel) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+
+    var dbUrl by remember { mutableStateOf(prefs.getString("custom_firebase_db_url", com.example.api.FirebaseConfig.DATABASE_URL) ?: com.example.api.FirebaseConfig.DATABASE_URL) }
+    var projectId by remember { mutableStateOf(prefs.getString("custom_firebase_project_id", "cloud-storage-f8ab3") ?: "cloud-storage-f8ab3") }
+    var appId by remember { mutableStateOf(prefs.getString("custom_firebase_app_id", "1:1071485303521:android:9e4d5881f185efbe5d5d88") ?: "1:1071485303521:android:9e4d5881f185efbe5d5d88") }
+    var storageBucket by remember { mutableStateOf(prefs.getString("custom_firebase_storage_bucket", "cloud-storage-f8ab3.appspot.com") ?: "cloud-storage-f8ab3.appspot.com") }
+    var realtimeSyncEnabled by remember { mutableStateOf(prefs.getBoolean("enable_firebase_realtime_sync", true)) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF09090C)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, com.example.ui.theme.WaterBlue.copy(alpha = 0.2f)),
+        modifier = Modifier.fillMaxWidth().padding(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SettingsInputAntenna,
+                    contentDescription = "Firebase Config",
+                    tint = com.example.ui.theme.WaterBlue,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = "Firebase Realtime Database & Storage",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+
+            Text(
+                text = "Configure your own Firebase endpoints below. When changed, the app client dynamically reinstantiates Retrofit connections to sync tasks, ledger, profile details, and peer focus sessions in real time.",
+                color = Color.Gray,
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
+
+            HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp)
+
+            // Database URL input
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Firebase Database URL", color = Color.Gray, fontSize = 11.sp)
+                OutlinedTextField(
+                    value = dbUrl,
+                    onValueChange = { dbUrl = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = com.example.ui.theme.WaterBlue,
+                        unfocusedBorderColor = Color.Gray,
+                        cursorColor = com.example.ui.theme.WaterBlue
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Project ID input
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Firebase Project ID", color = Color.Gray, fontSize = 11.sp)
+                OutlinedTextField(
+                    value = projectId,
+                    onValueChange = { projectId = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = com.example.ui.theme.WaterBlue,
+                        unfocusedBorderColor = Color.Gray,
+                        cursorColor = com.example.ui.theme.WaterBlue
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // App ID input
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Firebase App ID", color = Color.Gray, fontSize = 11.sp)
+                OutlinedTextField(
+                    value = appId,
+                    onValueChange = { appId = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = com.example.ui.theme.WaterBlue,
+                        unfocusedBorderColor = Color.Gray,
+                        cursorColor = com.example.ui.theme.WaterBlue
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Storage Bucket input
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Firebase Storage Bucket", color = Color.Gray, fontSize = 11.sp)
+                OutlinedTextField(
+                    value = storageBucket,
+                    onValueChange = { storageBucket = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = com.example.ui.theme.WaterBlue,
+                        unfocusedBorderColor = Color.Gray,
+                        cursorColor = com.example.ui.theme.WaterBlue
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Real-time Sync Switch
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                    .padding(12.dp)
+                    .clickable {
+                        realtimeSyncEnabled = !realtimeSyncEnabled
+                        prefs.edit().putBoolean("enable_firebase_realtime_sync", realtimeSyncEnabled).apply()
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Enable Real-time Synchronization",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "Bi-directional database updates are push-triggered in real time",
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
+                }
+                Switch(
+                    checked = realtimeSyncEnabled,
+                    onCheckedChange = { value ->
+                        realtimeSyncEnabled = value
+                        prefs.edit().putBoolean("enable_firebase_realtime_sync", value).apply()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = com.example.ui.theme.WaterBlue,
+                        checkedTrackColor = com.example.ui.theme.WaterBlue.copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = {
+                        // Reset to defaults
+                        dbUrl = com.example.api.FirebaseConfig.DATABASE_URL
+                        projectId = "cloud-storage-f8ab3"
+                        appId = "1:1071485303521:android:9e4d5881f185efbe5d5d88"
+                        storageBucket = "cloud-storage-f8ab3.appspot.com"
+                        realtimeSyncEnabled = true
+
+                        prefs.edit()
+                            .remove("custom_firebase_db_url")
+                            .remove("custom_firebase_project_id")
+                            .remove("custom_firebase_app_id")
+                            .remove("custom_firebase_storage_bucket")
+                            .putBoolean("enable_firebase_realtime_sync", true)
+                            .apply()
+
+                        com.example.api.FirebaseClient.activeUrl = com.example.api.FirebaseConfig.DATABASE_URL
+                        Toast.makeText(context, "Reset to official Life OS Firebase defaults!", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E24), contentColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333333))
+                ) {
+                    Text("Reset Default", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = {
+                        if (dbUrl.isBlank() || !dbUrl.startsWith("http")) {
+                            Toast.makeText(context, "Please enter a valid HTTP/S Firebase Database URL", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+
+                        prefs.edit()
+                            .putString("custom_firebase_db_url", dbUrl)
+                            .putString("custom_firebase_project_id", projectId)
+                            .putString("custom_firebase_app_id", appId)
+                            .putString("custom_firebase_storage_bucket", storageBucket)
+                            .putBoolean("enable_firebase_realtime_sync", realtimeSyncEnabled)
+                            .apply()
+
+                        // Dynamically update the Retrofit service active URL
+                        com.example.api.FirebaseClient.activeUrl = dbUrl
+
+                        Toast.makeText(context, "Firebase dynamic endpoint updated and saved successfully!", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = com.example.ui.theme.WaterBlue, contentColor = Color.Black)
+                ) {
+                    Text("Save Config", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
