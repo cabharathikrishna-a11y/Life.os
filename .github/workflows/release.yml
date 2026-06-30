@@ -64,9 +64,8 @@ jobs:
         CMD="npx firebase-tools appdistribution:distribute app/build/outputs/apk/release/app-release.apk --app \"$FIREBASE_APP_ID\""
         CMD="$CMD --release-notes \"Automated release build #${{ github.run_number }} (Version Code: ${{ env.VERSION_CODE }}) uploaded via GitHub Actions.\""
         
-        if [ -n "$FIREBASE_GROUPS" ]; then
-          CMD="$CMD --groups \"$FIREBASE_GROUPS\""
-        fi
+        GROUPS_TO_USE="${FIREBASE_GROUPS:-testers}"
+        CMD="$CMD --groups \"$GROUPS_TO_USE\""
         if [ -n "$FIREBASE_TESTERS" ]; then
           CMD="$CMD --testers \"$FIREBASE_TESTERS\""
         fi
