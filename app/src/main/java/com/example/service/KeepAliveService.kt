@@ -36,6 +36,7 @@ class KeepAliveService : Service() {
         super.onCreate()
         activeInstance = this
         Log.d("KeepAliveService", "KeepAliveService created")
+        com.example.api.FirebaseClient.appContext = applicationContext
         com.example.util.FocusTimerManager.init(applicationContext)
         com.example.util.AppBlockHelper.initializeStrictAppsIfNeeded(applicationContext)
         startCombinedMonitoring()
@@ -297,7 +298,7 @@ class KeepAliveService : Service() {
                 // Adaptive delay: 1 second if active timer or strict mode/monitored apps are present, 5 seconds if idle
                 val isTimerActive = FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value
                 val strictPrefs = getSharedPreferences("strict_mode_prefs", Context.MODE_PRIVATE)
-                val strictEnabled = strictPrefs.getBoolean("strict_mode_enabled", false)
+                val strictEnabled = strictPrefs.getBoolean("strict_mode_enabled", true)
                 val monitoredAppsCount = com.example.util.AppBlockHelper.getBlockedApps(applicationContext).size
 
                 val delayMs = if (isTimerActive || strictEnabled || monitoredAppsCount > 0) 1000L else 5000L
@@ -342,19 +343,14 @@ class KeepAliveService : Service() {
 
                     var intercepted = false
                     if (strictEnabled && !isBreakActive && isTimerActive) {
-                        val blockedApps = strictPrefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
-                        val monitoredApps = com.example.util.AppBlockHelper.getBlockedApps(applicationContext)
-
-                        if (blockedApps.contains(foregroundPackage) || monitoredApps.contains(foregroundPackage)) {
+                        if (com.example.util.AppBlockHelper.isPackageBlockedInStrictMode(applicationContext, foregroundPackage)) {
                             Log.d("KeepAliveService", "Strict Mode Intercept triggered for package: $foregroundPackage")
                             
-                            launch(Dispatchers.Main) {
-                                Toast.makeText(applicationContext, "STRICT MODE ACTIVE: Focus session in progress!", Toast.LENGTH_LONG).show()
-                            }
-
-                            val launchIntent = Intent(applicationContext, com.example.MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                putExtra("SHOW_FULL_SCREEN_TIMER", true)
+                            val launchIntent = Intent(applicationContext, com.example.ui.AppBlockInterceptActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                putExtra("INTERCEPTED_PACKAGE", foregroundPackage)
+                                putExtra("IS_STRICT_MODE_INTERCEPT", true)
+                                putExtra("IS_LIMIT_BLOCK", false)
                             }
                             startActivity(launchIntent)
                             intercepted = true
@@ -465,6 +461,7 @@ class KeepAliveService : Service() {
         friendsFocusJob = serviceScope.launch {
             while (true) {
                 checkFriendsFocusStateAndNotify()
+                checkInactivityAndNotify()
                 try {
                     // Commented out high-frequency background log write to prevent RAM/DB bloat on low-RAM devices
                     // com.example.util.FocusTimerManager.addSystemLog(applicationContext, "Background Daemon KeepAlive Pulse", "SYSTEM", "Triggering periodic state sync to ensure 100% alignment")
@@ -475,6 +472,103 @@ class KeepAliveService : Service() {
                 delay(45000) // Poll every 45 seconds to drastically reduce background Firebase traffic
             }
         }
+    }
+
+    private fun checkInactivityAndNotify() {
+        try {
+            val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            val isLoggedIn = prefs.getBoolean("is_logged_in", false)
+            if (!isLoggedIn) return
+
+            val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
+            val now = System.currentTimeMillis()
+
+            if (isLocalFocusing) {
+                // User is focusing! Update last activity timestamp and reset notification flag
+                prefs.edit()
+                    .putLong("last_focus_activity_timestamp_ms", now)
+                    .putBoolean("inactivity_6hr_notified", false)
+                    .apply()
+            } else if (com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) {
+                // Sleep hours: continuously advance the last active timestamp so inactivity timer starts fresh when waking up
+                prefs.edit()
+                    .putLong("last_focus_activity_timestamp_ms", now)
+                    .putBoolean("inactivity_6hr_notified", false)
+                    .apply()
+            } else {
+                var lastTime = prefs.getLong("last_focus_activity_timestamp_ms", 0L)
+                if (lastTime == 0L) {
+                    // Initialize if never set
+                    lastTime = now
+                    prefs.edit().putLong("last_focus_activity_timestamp_ms", now).apply()
+                }
+
+                val elapsedMs = now - lastTime
+                val sixHoursMs = 6 * 60 * 60 * 1000L // 6 hours straight
+                
+                if (elapsedMs >= sixHoursMs) {
+                    val alreadyNotified = prefs.getBoolean("inactivity_6hr_notified", false)
+                    if (!alreadyNotified) {
+                        sendInactivityEncouragementNotification()
+                        prefs.edit().putBoolean("inactivity_6hr_notified", true).apply()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("KeepAliveService", "Error in checkInactivityAndNotify: ${e.message}", e)
+        }
+    }
+
+    private fun sendInactivityEncouragementNotification() {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "inactivity_encouragement_channel"
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Study Reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Reminds you to start studying if you have been inactive"
+                enableLights(true)
+                enableVibration(true)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+        
+        val launchIntent = Intent(this, com.example.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("SHOW_TIMER_PAGE", true)
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        } else {
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = android.app.PendingIntent.getActivity(this, 10010, launchIntent, flags)
+        
+        val messages = listOf(
+            "It's been 6 hours since your last session. Let's start studying and make some progress! 📚",
+            "Ready to unlock your full potential? Click here to start your focus timer! 🎯",
+            "A small step today leads to big achievements tomorrow. Let's do a quick focus session! 🚀",
+            "Consistency is key! You haven't focused in a while. Let's study together now! 👨‍💻",
+            "Your goals are waiting. Start a focus session now and cross off your tasks! 🏆"
+        )
+        val message = messages.random()
+        
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Let's Start Studying! 📚")
+            .setContentText(message)
+            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .build()
+            
+        notificationManager.notify(10010, notification)
     }
 
     private suspend fun checkFriendsFocusStateAndNotify() {
@@ -544,7 +638,7 @@ class KeepAliveService : Service() {
                                 )
 
                                 val senderName = cleanName(if (!signal.senderDisplayName.isNullOrEmpty()) signal.senderDisplayName else signal.senderUsername)
-                                val bellNotificationId = 10003
+                                val bellNotificationId = 10003 // sleep time check active
                                 val bellBuilder = NotificationCompat.Builder(this, bellChannelId)
                                     .setContentTitle("Session Reminder!")
                                     .setContentText("$senderName rang the bell to remind you to start your timer!")
@@ -554,7 +648,7 @@ class KeepAliveService : Service() {
                                     .setContentIntent(bellPendingIntent)
                                     .setAutoCancel(true)
 
-                                notificationManager.notify(bellNotificationId, bellBuilder.build())
+                                if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) { notificationManager.notify(bellNotificationId, bellBuilder.build()) } else { Log.i("KeepAliveService", "Muting bell signal notification during sleep hours.") }
                             }
 
                             // Mark as processed locally and update state on Firebase to prevent repeating
@@ -628,7 +722,7 @@ class KeepAliveService : Service() {
                                     .setContentIntent(alertPendingIntent)
                                     .setAutoCancel(true)
 
-                                notificationManager.notify(20000 + username.hashCode(), alertBuilder.build())
+                                if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) { notificationManager.notify(20000 + username.hashCode(), alertBuilder.build()) } else { Log.i("KeepAliveService", "Muting alert notification during sleep hours.") }
                             }
 
                             lastFocusStatusMap[username] = isPeerNowFocusing
@@ -753,6 +847,10 @@ class KeepAliveService : Service() {
     }
 
     private fun triggerWaterReminderNotification() {
+        if (com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) {
+            Log.i("KeepAliveService", "Muting water reminder during sleep hours.")
+            return
+        }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -905,6 +1003,10 @@ class KeepAliveService : Service() {
     }
 
     private fun sendRankChangedNotification(message: String) {
+        if (com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) {
+            Log.i("KeepAliveService", "Muting rank changed notification during sleep hours.")
+            return
+        }
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val rankChannelId = "friends_rank_channel"
         

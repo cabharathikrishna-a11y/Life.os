@@ -44,6 +44,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.delay
+import android.widget.Toast
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +60,7 @@ fun LoginView(viewModel: AppViewModel) {
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var loggingIn by remember { mutableStateOf(false) }
     val requestDriveScope = false
+    var testerCountdown by remember { mutableStateOf(-1) }
     
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -160,16 +165,51 @@ fun LoginView(viewModel: AppViewModel) {
                             )
                         ),
                         RoundedCornerShape(20.dp)
-                    ),
+                    )
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                val job = scope.launch {
+                                    for (i in 1..15) {
+                                        delay(1000)
+                                        testerCountdown = i
+                                        if (i == 5) {
+                                            Toast.makeText(context, "Entering Tester Mode in 10s...", Toast.LENGTH_SHORT).show()
+                                        } else if (i == 10) {
+                                            Toast.makeText(context, "Entering Tester Mode in 5s...", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    // Successfully held for 15s!
+                                    Toast.makeText(context, "Tester Mode activated! 🕵️", Toast.LENGTH_LONG).show()
+                                    viewModel.activateTesterMode()
+                                }
+                                try {
+                                    tryAwaitRelease()
+                                } finally {
+                                    job.cancel()
+                                    testerCountdown = -1
+                                }
+                            }
+                        )
+                    },
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                    contentDescription = "LIFE OS Logo",
-                    modifier = Modifier
-                        .size(64.dp)
-                        .padding(4.dp)
-                )
+                if (testerCountdown != -1) {
+                    Text(
+                        text = (15 - testerCountdown).toString(),
+                        color = Color(0xFF38B0F2),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                        contentDescription = "LIFE OS Logo",
+                        modifier = Modifier
+                            .size(64.dp)
+                            .padding(4.dp)
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(

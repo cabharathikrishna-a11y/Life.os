@@ -49,6 +49,17 @@ fun LifeOSBackupSection(viewModel: AppViewModel) {
             }
         }
     }
+
+    val htmlExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            statusText = "Exporting offline archive..."
+            viewModel.exportHtmlZip(context, uri) { success ->
+                statusText = if (success) "HTML Archive exported successfully! (Offline companion ready)" else "Failed to export HTML archive."
+            }
+        }
+    }
     
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -89,6 +100,18 @@ fun LifeOSBackupSection(viewModel: AppViewModel) {
             Icon(Icons.Default.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Import and Reconcile Backup (JSON)")
+        }
+
+        Button(
+            onClick = {
+                htmlExportLauncher.launch("life_os_offline_dashboard_${System.currentTimeMillis()}.zip")
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F3D2E), contentColor = Color.Green),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Icon(Icons.Default.Build, contentDescription = null, tint = Color.Green)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Export Offline HTML Companion (ZIP)", color = Color.Green)
         }
         
         statusText?.let {
@@ -450,6 +473,19 @@ fun GoogleDriveSyncSection(viewModel: AppViewModel) {
     
     val googleAccount = remember { GoogleSignIn.getLastSignedInAccount(context) }
     val hasPermission = remember { GoogleDriveSyncManager.hasDrivePermission(context) }
+
+    // Backup sizes state
+    var driveBackupSizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var isLoadingSizes by remember { mutableStateOf(false) }
+
+    LaunchedEffect(hasPermission, lastSyncTs) {
+        if (hasPermission) {
+            isLoadingSizes = true
+            val sizes = GoogleDriveSyncManager.getBackupSizes(context)
+            driveBackupSizes = sizes
+            isLoadingSizes = false
+        }
+    }
     
     // Auth resolution launcher
     val authResolutionLauncher = rememberLauncherForActivityResult(
@@ -579,6 +615,63 @@ fun GoogleDriveSyncSection(viewModel: AppViewModel) {
                         color = if (lastSyncTs > 0L) Color.LightGray else Color.Gray,
                         fontSize = 11.sp
                     )
+                }
+            }
+
+            if (hasPermission) {
+                val formatBytes = { bytes: Long ->
+                    if (bytes <= 0) "0 B"
+                    else {
+                        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+                        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+                        String.format(java.util.Locale.US, "%.2f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+                    }
+                }
+
+                HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "UPLOADED STORAGE SIZE ON GOOGLE DRIVE",
+                        color = Color.Gray,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isLoadingSizes) {
+                        Text(
+                            text = "Calculating uploaded storage size...",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    } else if (driveBackupSizes.isEmpty()) {
+                        Text(
+                            text = "No backup files located.",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    } else {
+                        driveBackupSizes.forEach { (fileName, size) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "☁️ $fileName",
+                                    color = Color.LightGray,
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = formatBytes(size),
+                                    color = WaterBlue,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

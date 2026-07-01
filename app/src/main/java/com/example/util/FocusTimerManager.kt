@@ -16,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.media.AudioManager
 import android.media.AudioDeviceInfo
+import android.widget.Toast
 import com.example.data.AppDatabase
 import com.example.data.Task
 import com.example.service.KeepAliveService
@@ -30,8 +31,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object FocusTimerManager {
+    private val firebaseSyncMutex = Mutex()
     private val logLock = Any()
     private val recordLock = Any()
     private val initLock = Any()
@@ -120,60 +124,62 @@ object FocusTimerManager {
         val isAdmin = prefs.getBoolean("is_admin", false)
         
         if (isLoggedIn && !isAdmin && currentUsername != null) {
-            val isTimerActive = isTimerRunning.value
-            val isSwActive = isStopwatchActive.value
-            val isFocus = isFocusPhase.value
-            val cumSecs = cumulativeSessionFocusSeconds.value
-            val swSecs = stopwatchSeconds.value
-            val attachedTaskTitle = attachedTask.value?.title
-
             scope.launch(Dispatchers.IO) {
-                try {
-                    addSystemLog(context, "Firebase Sync Started", "FIREBASE_SYNC", "TimerActive=$isTimerActive, StopwatchActive=$isSwActive, Focus=$isFocus, CumSecs=$cumSecs, SwSecs=$swSecs")
-                    val response = com.example.api.FirebaseClient.api.getUsers()
-                    if (response.isSuccessful) {
-                        val users = response.body()
-                        val baseUser = users?.get(currentUsername)
-                        if (baseUser != null) {
-                            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-                            val todayStr = sdf.format(java.util.Date())
-                            
-                            val todayRecords = focusRecords.value.filter { r -> r.dateString == todayStr || r.dateString.isEmpty() }
+                firebaseSyncMutex.withLock {
+                    val isTimerActive = isTimerRunning.value
+                    val isSwActive = isStopwatchActive.value
+                    val isFocus = isFocusPhase.value
+                    val cumSecs = cumulativeSessionFocusSeconds.value
+                    val swSecs = stopwatchSeconds.value
+                    val attachedTaskTitle = attachedTask.value?.title
 
-                            val isRunning = isTimerRunning.value || isStopwatchActive.value
-                            val focusStatus = if (!isFocus) {
-                                "break"
-                            } else if (isTimerRunning.value || isStopwatchActive.value) {
-                                "focusing"
-                            } else if (accumulatedSessionTimeMs.value > 0) {
-                                "paused"
-                            } else {
-                                "idle"
-                            }
+                    try {
+                        addSystemLog(context, "Firebase Sync Started", "FIREBASE_SYNC", "TimerActive=$isTimerActive, StopwatchActive=$isSwActive, Focus=$isFocus, CumSecs=$cumSecs, SwSecs=$swSecs")
+                        val response = com.example.api.FirebaseClient.api.getUsers()
+                        if (response.isSuccessful) {
+                            val users = response.body()
+                            val baseUser = users?.get(currentUsername)
+                            if (baseUser != null) {
+                                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                                val todayStr = sdf.format(java.util.Date())
+                                
+                                val todayRecords = focusRecords.value.filter { r -> r.dateString == todayStr || r.dateString.isEmpty() }
 
-                            val updatedUser = baseUser.copy(
-                                isFocusing = isRunning,
-                                accumulatedTimeMs = accumulatedSessionTimeMs.value,
-                                lastResumeTimeMs = if (isRunning) lastResumeTimeMs.value else null,
-                                focusStatus = focusStatus,
-                                currentTaskTitle = if (isFocus) attachedTaskTitle else null,
-                                todaysFocusRecords = todayRecords,
-                                isStopwatchMode = isSwActive,
-                                lastUpdatedTimestamp = System.currentTimeMillis()
-                            )
-                            com.example.api.FirebaseClient.api.putUser(currentUsername, updatedUser)
-                            addSystemLog(context, "Firebase Sync Success", "FIREBASE_SYNC", "User state updated: status=$focusStatus, accumulatedTime=${accumulatedSessionTimeMs.value}")
-                            try {
-                                com.example.widget.WidgetUpdater.updateAllWidgets(context)
-                            } catch (we: Exception) {
-                                Log.e("FocusTimerManager", "Widget update failed during firebase sync", we)
+                                val isRunning = isTimerRunning.value || isStopwatchActive.value
+                                val focusStatus = if (!isFocus) {
+                                    "break"
+                                } else if (isTimerRunning.value || isStopwatchActive.value) {
+                                    "focusing"
+                                } else if (accumulatedSessionTimeMs.value > 0) {
+                                    "paused"
+                                } else {
+                                    "idle"
+                                }
+
+                                val updatedUser = baseUser.copy(
+                                    isFocusing = isRunning,
+                                    accumulatedTimeMs = accumulatedSessionTimeMs.value,
+                                    lastResumeTimeMs = if (isRunning) lastResumeTimeMs.value else null,
+                                    focusStatus = focusStatus,
+                                    currentTaskTitle = if (isFocus) attachedTaskTitle else null,
+                                    todaysFocusRecords = todayRecords,
+                                    isStopwatchMode = isSwActive,
+                                    lastUpdatedTimestamp = System.currentTimeMillis()
+                                )
+                                com.example.api.FirebaseClient.api.putUser(currentUsername, updatedUser)
+                                addSystemLog(context, "Firebase Sync Success", "FIREBASE_SYNC", "User state updated: status=$focusStatus, accumulatedTime=${accumulatedSessionTimeMs.value}")
+                                try {
+                                    com.example.widget.WidgetUpdater.updateAllWidgets(context)
+                                } catch (we: Exception) {
+                                    Log.e("FocusTimerManager", "Widget update failed during firebase sync", we)
+                                }
                             }
+                        } else {
+                            addSystemLog(context, "Firebase Sync Failed", "FIREBASE_SYNC", "Server returned error code: ${response.code()}")
                         }
-                    } else {
-                        addSystemLog(context, "Firebase Sync Failed", "FIREBASE_SYNC", "Server returned error code: ${response.code()}")
+                    } catch (e: Exception) {
+                        addSystemLog(context, "Firebase Sync Error", "FIREBASE_SYNC", "Error: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    addSystemLog(context, "Firebase Sync Error", "FIREBASE_SYNC", "Error: ${e.message}")
                 }
             }
         }
@@ -819,11 +825,16 @@ object FocusTimerManager {
             stopAlarm()
         }
         if (isTimerRunning.value) return
-        isTimerRunning.value = true
-        
         val appContext = context.applicationContext
 
         if (isFocusPhase.value && !wasStartedFromStopwatch.value) {
+            val completedTodaySecs = getTodayFocusSeconds()
+            if (completedTodaySecs >= 72000) {
+                Toast.makeText(appContext, "⚠️ Daily focus limit of 20 hours reached! Take a break.", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            isTimerRunning.value = true
             // --- POMODORO FOCUS MODE (Timestamp Engine) ---
             recordSessionStart()
             addSystemLog(appContext, "Start Timer", "BUTTON_PRESS", "Duration=${timerDurationMinutes.value}m")
@@ -850,6 +861,24 @@ object FocusTimerManager {
                     timerSecondsLeft.value = maxOf(0, (remainingMs / 1000).toInt())
                     cumulativeSessionFocusSeconds.value = (totalElapsedMs / 1000).toInt()
 
+                    val currentSessionSecs = cumulativeSessionFocusSeconds.value
+                    if (currentSessionSecs >= 21600) { // 6 hours
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(appContext, "⚠️ Session focus limit of 6 hours reached! Timer paused.", Toast.LENGTH_LONG).show()
+                        }
+                        pauseTimer(appContext)
+                        break
+                    }
+
+                    val todayTotalSecs = getTodayFocusSeconds() + currentSessionSecs
+                    if (todayTotalSecs >= 72000) { // 20 hours
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(appContext, "⚠️ Daily focus limit of 20 hours reached! Timer paused.", Toast.LENGTH_LONG).show()
+                        }
+                        pauseTimer(appContext)
+                        break
+                    }
+
                     val currentMinutes = ((totalElapsedMs / 1000) / 60).toInt()
                     val diffMinutes = currentMinutes - lastRecordedMinutes
                     if (diffMinutes > 0) {
@@ -871,6 +900,7 @@ object FocusTimerManager {
                 }
             }
         } else {
+            isTimerRunning.value = true
             // --- BREAK MODE (Simple Countdown) ---
             addSystemLog(appContext, "Start Break", "BUTTON_PRESS", "Left=${timerSecondsLeft.value}s")
             KeepAliveService.start(appContext)
@@ -921,6 +951,8 @@ object FocusTimerManager {
 
             pendingFocusReview.value = FocusRecord(startStr, endStr, taskName, duration, todayStr, "", duration * 60)
             cumulativeSessionFocusSeconds.value = 0
+            accumulatedSessionTimeMs.value = 0L
+            lastResumeTimeMs.value = null
 
             // Switch to Break Mode
             isFocusPhase.value = false
@@ -969,6 +1001,10 @@ object FocusTimerManager {
                 // Normal Pomo Break End: Reset to Work Phase
                 isFocusPhase.value = true
                 timerSecondsLeft.value = timerDurationMinutes.value * 60
+
+                accumulatedSessionTimeMs.value = 0L
+                lastResumeTimeMs.value = null
+                cumulativeSessionFocusSeconds.value = 0
 
                 saveActiveSessionState(appContext)
                 KeepAliveService.updateNotification(appContext)
@@ -1056,33 +1092,35 @@ object FocusTimerManager {
         val isAdmin = prefs.getBoolean("is_admin", false)
         if (isLoggedIn && !isAdmin && currentUsername != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    val response = com.example.api.FirebaseClient.api.getUsers()
-                    if (response.isSuccessful) {
-                        val users = response.body()
-                        val baseUser = users?.get(currentUsername)
-                        if (baseUser != null) {
-                            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-                            val todayStr = sdf.format(java.util.Date())
-                            val completedTodaySeconds = focusRecords.value.sumOf { r ->
-                                getOverlapSecondsForDate(r, todayStr)
+                firebaseSyncMutex.withLock {
+                    try {
+                        val response = com.example.api.FirebaseClient.api.getUsers()
+                        if (response.isSuccessful) {
+                            val users = response.body()
+                            val baseUser = users?.get(currentUsername)
+                            if (baseUser != null) {
+                                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                                val todayStr = sdf.format(java.util.Date())
+                                val completedTodaySeconds = focusRecords.value.sumOf { r ->
+                                    getOverlapSecondsForDate(r, todayStr)
+                                }
+                                val todayRecords = focusRecords.value.filter { it.dateString == todayStr || it.dateString.isEmpty() }
+                                
+                                val updatedUser = baseUser.copy(
+                                    isFocusing = false,
+                                    accumulatedTimeMs = 0L,
+                                    lastResumeTimeMs = null,
+                                    todaysFocusRecords = todayRecords,
+                                    lastUpdatedTimestamp = System.currentTimeMillis(),
+                                    focusStatus = "idle"
+                                )
+                                com.example.api.FirebaseClient.api.putUser(currentUsername, updatedUser)
+                                Log.d("FocusTimerManager", "Successfully synced end-event data persistence to Firebase.")
                             }
-                            val todayRecords = focusRecords.value.filter { it.dateString == todayStr || it.dateString.isEmpty() }
-                            
-                            val updatedUser = baseUser.copy(
-                                isFocusing = false,
-                                accumulatedTimeMs = 0L,
-                                lastResumeTimeMs = null,
-                                todaysFocusRecords = todayRecords,
-                                lastUpdatedTimestamp = System.currentTimeMillis(),
-                                focusStatus = "idle"
-                            )
-                            com.example.api.FirebaseClient.api.putUser(currentUsername, updatedUser)
-                            Log.d("FocusTimerManager", "Successfully synced end-event data persistence to Firebase.")
                         }
+                    } catch (e: Exception) {
+                        Log.e("FocusTimerManager", "Failed to sync end-event data to Firebase", e)
                     }
-                } catch (e: Exception) {
-                    Log.e("FocusTimerManager", "Failed to sync end-event data to Firebase", e)
                 }
             }
         }
@@ -1204,6 +1242,13 @@ object FocusTimerManager {
             stopAlarm()
         }
         val appContext = context.applicationContext
+
+        val completedTodaySecs = getTodayFocusSeconds()
+        if (completedTodaySecs >= 72000) {
+            Toast.makeText(appContext, "⚠️ Daily focus limit of 20 hours reached! Take a break.", Toast.LENGTH_LONG).show()
+            return
+        }
+
         // If we are currently in break mode, stop the break timer and go back to stopwatch mode
         if (!isFocusPhase.value) {
             timerJob?.cancel()
@@ -1239,13 +1284,25 @@ object FocusTimerManager {
                 val totalMs = accumulatedSessionTimeMs.value + currentChunkMs
                 
                 stopwatchSeconds.value = (totalMs / 1000).toInt()
-                
-                if (stopwatchSeconds.value >= 43200) {
+
+                val currentSessionSecs = stopwatchSeconds.value
+                if (currentSessionSecs >= 21600) { // 6 hours limit
+                    launch(Dispatchers.Main) {
+                        Toast.makeText(appContext, "⚠️ Session focus limit of 6 hours reached! Stopwatch paused.", Toast.LENGTH_LONG).show()
+                    }
                     pauseStopwatch(appContext, stopActiveAlarm = false)
-                    if (soundEnabled.value) playStrongBellSoundWithVibration(appContext)
-                    stopwatchLimitReached.value = true
                     break
                 }
+
+                val todayTotalSecs = getTodayFocusSeconds() + currentSessionSecs
+                if (todayTotalSecs >= 72000) { // 20 hours limit
+                    launch(Dispatchers.Main) {
+                        Toast.makeText(appContext, "⚠️ Daily focus limit of 20 hours reached! Stopwatch paused.", Toast.LENGTH_LONG).show()
+                    }
+                    pauseStopwatch(appContext, stopActiveAlarm = false)
+                    break
+                }
+                
                 updateOverlayTextAndState()
             }
         }
@@ -1690,16 +1747,16 @@ object FocusTimerManager {
 
     fun addFocusRecord(context: Context, startTime: String, endTime: String, taskTitle: String, durationMinutes: Int, notes: String = "", durationSeconds: Int = durationMinutes * 60, tag: String = "", id: String = java.util.UUID.randomUUID().toString()): FocusRecord {
         val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
-        val cappedMinutes = if (durationMinutes > 720) 720 else durationMinutes
-        val cappedSeconds = if (durationSeconds > 43200) 43200 else durationSeconds
+        val cappedMinutes = if (durationMinutes > 360) 360 else durationMinutes
+        val cappedSeconds = if (durationSeconds > 21600) 21600 else durationSeconds
         val record = FocusRecord(startTime, endTime, taskTitle, cappedMinutes, todayStr, notes, cappedSeconds, tag, id = id)
         
         var updatedList: List<FocusRecord> = emptyList()
         focusRecords.update { current ->
             val currentList = current.toMutableList()
             currentList.add(0, record)
-            updatedList = currentList
-            currentList
+            updatedList = sanitizeRecordsList(currentList)
+            updatedList
         }
         saveFocusRecords(context, updatedList)
         return record
@@ -1711,12 +1768,12 @@ object FocusTimerManager {
             val currentList = current.toMutableList()
             val index = currentList.indexOfFirst { it.id == id }
             if (index != -1) {
-                val cappedMinutes = if (updatedRecord.durationMinutes > 720) 720 else updatedRecord.durationMinutes
-                val cappedSeconds = if (updatedRecord.durationSeconds > 43200) 43200 else updatedRecord.durationSeconds
+                val cappedMinutes = if (updatedRecord.durationMinutes > 360) 360 else updatedRecord.durationMinutes
+                val cappedSeconds = if (updatedRecord.durationSeconds > 21600) 21600 else updatedRecord.durationSeconds
                 val record = updatedRecord.copy(durationMinutes = cappedMinutes, durationSeconds = cappedSeconds)
                 currentList[index] = record
-                updatedList = currentList
-                currentList
+                updatedList = sanitizeRecordsList(currentList)
+                updatedList!!
             } else {
                 current
             }
@@ -1822,12 +1879,72 @@ object FocusTimerManager {
         }
     }
 
+    fun sanitizeRecordsList(list: List<FocusRecord>): List<FocusRecord> {
+        // 1. Cap each record to per-session limit of 6 hours (360 minutes, 21600 seconds)
+        val sessionCapped = list.map {
+            var changed = false
+            var mins = it.durationMinutes
+            var secs = it.durationSeconds
+            if (mins > 360) {
+                mins = 360
+                changed = true
+            }
+            if (secs > 21600) {
+                secs = 21600
+                changed = true
+            }
+            if (changed) {
+                it.copy(durationMinutes = mins, durationSeconds = secs)
+            } else {
+                it
+            }
+        }
+
+        // 2. Cap per-day total to daily limit of 20 hours (1200 minutes, 72000 seconds)
+        val groupedByDate = sessionCapped.groupBy { it.dateString }
+        val finalSanitizedList = mutableListOf<FocusRecord>()
+
+        for ((date, records) in groupedByDate) {
+            val totalSecs = records.sumOf { it.durationSeconds }
+            if (totalSecs > 72000) {
+                var accumulatedSecs = 0
+                var accumulatedMins = 0
+                records.forEachIndexed { index, record ->
+                    if (index == records.lastIndex) {
+                        val remainingSecs = 72000 - accumulatedSecs
+                        val remainingMins = 1200 - accumulatedMins
+                        if (remainingSecs > 0) {
+                            finalSanitizedList.add(record.copy(
+                                durationMinutes = maxOf(1, remainingMins),
+                                durationSeconds = maxOf(1, remainingSecs)
+                            ))
+                        }
+                    } else {
+                        val fraction = record.durationSeconds.toDouble() / totalSecs
+                        val targetSecs = maxOf(1, (fraction * 72000).toInt())
+                        val targetMins = maxOf(1, (fraction * 1200).toInt())
+                        accumulatedSecs += targetSecs
+                        accumulatedMins += targetMins
+                        finalSanitizedList.add(record.copy(
+                            durationMinutes = targetMins,
+                            durationSeconds = targetSecs
+                        ))
+                    }
+                }
+            } else {
+                finalSanitizedList.addAll(records)
+            }
+        }
+
+        val orderMap = list.withIndex().associate { it.value.id to it.index }
+        return finalSanitizedList.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+    }
+
     fun loadFocusRecords(context: Context): List<FocusRecord> {
         val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val serialized = prefs.getString("focus_records_list", null) ?: return emptyList()
         if (serialized.isEmpty()) return emptyList()
         return try {
-            var diffMins = 0
             val list = serialized.split("\n").mapNotNull { line ->
                 if (line.isBlank()) return@mapNotNull null
                 val parts = line.split("|")
@@ -1840,38 +1957,26 @@ object FocusTimerManager {
                     } else ""
                     val originalMins = parts[3].toInt()
                     val originalSecs = if (parts.size >= 7) parts[6].toIntOrNull() ?: (originalMins * 60) else (originalMins * 60)
-                    
-                    if (originalMins > 720) {
-                        diffMins += (originalMins - 720)
-                    }
-                    
-                    // Cap at 12 hours (720 mins or 43200 seconds)
-                    val durationMins = if (originalMins > 720) 720 else originalMins
-                    val durationSecs = if (originalSecs > 43200) 43200 else originalSecs
                     val tagValue = if (parts.size >= 8) parts[7] else ""
                     val idValue = if (parts.size >= 9) parts[8] else java.util.UUID.randomUUID().toString()
-                    
-                    FocusRecord(parts[0], parts[1], parts[2], durationMins, dateValue, notesValue, durationSecs, tagValue, idValue)
+                    FocusRecord(parts[0], parts[1], parts[2], originalMins, dateValue, notesValue, originalSecs, tagValue, idValue)
                 } else null
             }
-            
-            val hasChanged = list.any { it.durationMinutes > 720 || it.durationSeconds > 43200 } || diffMins > 0
-            if (hasChanged) {
-                val cleanedList = list.map {
-                    if (it.durationMinutes > 720 || it.durationSeconds > 43200) {
-                        it.copy(durationMinutes = 720, durationSeconds = 43200)
-                    } else {
-                        it
-                    }
-                }
-                saveFocusRecords(context, cleanedList)
+
+            val sanitized = sanitizeRecordsList(list)
+            val totalOriginalMins = list.sumOf { it.durationMinutes }
+            val totalSanitizedMins = sanitized.sumOf { it.durationMinutes }
+            val diffMins = totalOriginalMins - totalSanitizedMins
+
+            if (sanitized != list || diffMins > 0) {
+                saveFocusRecords(context, sanitized)
                 if (diffMins > 0) {
                     val currentTotal = totalFocusMinutes.value
                     val newTotal = maxOf(0, currentTotal - diffMins)
                     totalFocusMinutes.value = newTotal
                     prefs.edit().putInt("total_focus_minutes", newTotal).apply()
                 }
-                cleanedList
+                sanitized
             } else {
                 list
             }

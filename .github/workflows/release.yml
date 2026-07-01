@@ -39,16 +39,51 @@ jobs:
     - name: Get Version Info
       id: get_version
       run: |
-        VERSION_CODE=$(grep -E 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | sed -E 's/.*versionCode\s*=\s*([0-9]+).*/\1/')
-        VERSION_NAME=$(grep -E 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/')
-        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
-        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-        echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-        echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+        LOCAL_CODE=$(grep -E 'versionCode\s*=\s*customCode\s*\?\:\s*[0-9]+' app/build.gradle.kts | sed -E 's/.*versionCode\s*=\s*customCode\s*\?\:\s*([0-9]+).*/\1/')
+        if [ -z "$LOCAL_CODE" ] || ! [[ "$LOCAL_CODE" =~ ^[0-9]+$ ]]; then
+          LOCAL_CODE=7
+        fi
+        
+        echo "Local fallback versionCode is $LOCAL_CODE"
+        
+        # Query Firebase Realtime Database for the last successful build's version code
+        DB_VAL=$(curl -s "https://cloud-storage-f8ab3-default-rtdb.asia-southeast1.firebasedatabase.app/versionId.json" | tr -d '"')
+        echo "Firebase DB versionId is: $DB_VAL"
+        if [ "$DB_VAL" = "null" ]; then
+          DB_VAL=""
+        fi
+        
+        NEW_VERSION_CODE=""
+        
+        if [ -n "$DB_VAL" ] && [[ "$DB_VAL" =~ ^[0-9]+$ ]]; then
+          NEW_VERSION_CODE=$((DB_VAL + 1))
+          echo "Determined version code from Firebase DB: $NEW_VERSION_CODE"
+        else
+          echo "Firebase DB fetch was invalid or empty. Trying GitHub Releases latest tag..."
+          # Fetch latest release tag from GitHub API
+          GH_TAG=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -oP '"tag_name": "\s*v1.0.\K[0-9]+')
+          if [ -n "$GH_TAG" ] && [[ "$GH_TAG" =~ ^[0-9]+$ ]]; then
+            NEW_VERSION_CODE=$((GH_TAG + 1))
+            echo "Determined version code from GitHub latest release: $NEW_VERSION_CODE"
+          else
+            NEW_VERSION_CODE=$((LOCAL_CODE + 1))
+            echo "Fallback to incremented local code: $NEW_VERSION_CODE"
+          fi
+        fi
+        
+        NEW_VERSION_NAME="${NEW_VERSION_CODE}.0"
+        
+        echo "Final VERSION_CODE: $NEW_VERSION_CODE"
+        echo "Final VERSION_NAME: $NEW_VERSION_NAME"
+        
+        echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
+        echo "VERSION_NAME=$NEW_VERSION_NAME" >> $GITHUB_ENV
+        echo "version_code=$NEW_VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "version_name=$NEW_VERSION_NAME" >> $GITHUB_OUTPUT
 
-    # We compile the automated release APK using the project's native versionCode and versionName
+    # We compile the automated release APK using the dynamically determined versionCode and versionName
     - name: Compile Automated Release APK
-      run: ./gradlew assembleRelease
+      run: ./gradlew assembleRelease -PcustomVersionCode=${{ env.VERSION_CODE }} -PcustomVersionName="${{ env.VERSION_NAME }}"
 
     - name: Distribute Release APK to Firebase App Distribution
       env:

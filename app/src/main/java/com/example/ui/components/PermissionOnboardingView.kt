@@ -65,6 +65,11 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
     var hasDrivePermission by remember { mutableStateOf(false) }
     var hasPackageInstallPermission by remember { mutableStateOf(false) }
 
+    // Drive automatic backup check & restore states
+    var isCheckingDriveData by remember { mutableStateOf(false) }
+    var driveCheckMessage by remember { mutableStateOf("") }
+    var hasCheckedDriveData by remember { mutableStateOf(false) }
+
     val scope = rememberCoroutineScope()
 
     // Check permissions helper
@@ -96,6 +101,40 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
         while (true) {
             checkAllPermissions()
             delay(1000)
+        }
+    }
+
+    // Auto-check Drive and retrieve if permission is acquired during installation
+    LaunchedEffect(hasDrivePermission) {
+        if (hasDrivePermission && !hasCheckedDriveData) {
+            hasCheckedDriveData = true
+            isCheckingDriveData = true
+            driveCheckMessage = "🔍 Connecting to Google Drive to check for existing focus/db data..."
+            try {
+                val hasBackup = GoogleDriveSyncManager.hasExistingBackupData(context)
+                if (hasBackup) {
+                    driveCheckMessage = "📦 Existing backup data found on Google Drive! Retrieving and restoring data..."
+                    delay(1500)
+                    val (success, msg) = GoogleDriveSyncManager.checkAndRetrieveDriveData(context, viewModel.appDatabase)
+                    if (success) {
+                        driveCheckMessage = "✅ Successfully restored backup data! Taking you to the user interface..."
+                        delay(2000)
+                        viewModel.navigateTo(viewModel.getDefaultScreen())
+                    } else {
+                        driveCheckMessage = "⚠️ Found backup but failed to restore: $msg. Proceeding..."
+                        delay(2000)
+                        isCheckingDriveData = false
+                    }
+                } else {
+                    driveCheckMessage = "ℹ️ No existing backup found on Google Drive. Ready to start fresh!"
+                    delay(1500)
+                    isCheckingDriveData = false
+                }
+            } catch (e: Exception) {
+                driveCheckMessage = "⚠️ Error communicating with Google Drive: ${e.message}"
+                delay(2000)
+                isCheckingDriveData = false
+            }
         }
     }
 
@@ -421,6 +460,38 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
 
             Spacer(modifier = Modifier.height(48.dp))
         }
+    }
+
+    if (isCheckingDriveData) {
+        AlertDialog(
+            onDismissRequest = { /* Prevent dismiss during critical sync/restore */ },
+            confirmButton = {},
+            title = {
+                Text(
+                    text = "Google Drive Backup Sync",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator(color = WaterBlue)
+                    Text(
+                        text = driveCheckMessage,
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 18.sp
+                    )
+                }
+            },
+            containerColor = DeepSlate,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }
 

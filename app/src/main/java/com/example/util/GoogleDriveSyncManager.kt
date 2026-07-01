@@ -7,6 +7,8 @@ import com.google.android.gms.auth.GoogleAuthUtil
 import com.google.android.gms.auth.UserRecoverableAuthException
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -16,8 +18,9 @@ import org.json.JSONObject
 import java.util.Locale
 
 object GoogleDriveSyncManager {
+    private val driveMutex = Mutex()
     private const val TAG = "GoogleDriveSync"
-    private const val DRIVE_SCOPE = "oauth2:https://www.googleapis.com/auth/drive.appdata"
+    private const val DRIVE_SCOPE = "oauth2:https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file"
     private const val BACKUP_FILE_NAME = "focus_backup.json"
     private const val ALL_DATA_BACKUP_FILE_NAME = "app_data_backup.zip"
 
@@ -72,49 +75,51 @@ object GoogleDriveSyncManager {
         context: Context,
         onAuthResolutionRequired: (Intent) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val token = getAccessToken(context, onAuthResolutionRequired)
-            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+        driveMutex.withLock {
+            val token = getAccessToken(context, onAuthResolutionRequired)
+                ?: return@withLock Pair(false, "Authorization required. Please connect your Google Drive.")
 
-        try {
-            // 1. Load localized focus data from SharedPreferences
-            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-            val focusRecordsSerialized = prefs.getString("focus_records_list", "") ?: ""
-            val totalMinutes = prefs.getInt("total_focus_minutes", 0)
-            val pomosCount = prefs.getInt("today_pomos_count", 0)
+            try {
+                // 1. Load localized focus data from SharedPreferences
+                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                val focusRecordsSerialized = prefs.getString("focus_records_list", "") ?: ""
+                val totalMinutes = prefs.getInt("total_focus_minutes", 0)
+                val pomosCount = prefs.getInt("today_pomos_count", 0)
 
-            // 2. Build beautiful focus backup JSON payload
-            val backupJson = JSONObject().apply {
-                put("focus_records_list", focusRecordsSerialized)
-                put("total_focus_minutes", totalMinutes)
-                put("today_pomos_count", pomosCount)
-                put("last_sync_timestamp", System.currentTimeMillis())
-                put("device_model", android.os.Build.MODEL)
-            }
-            val contentStr = backupJson.toString()
-
-            // 3. Find if the file already exists in AppData
-            var fileId = findBackupFileId(token)
-            if (fileId == null) {
-                // Not found, create new file metadata first
-                Log.i(TAG, "Backup file not found in Google Drive. Creating a new one...")
-                fileId = createBackupFileMetadata(token)
-                if (fileId == null) {
-                    return@withContext Pair(false, "Failed to initialize backup space in Google Drive.")
+                // 2. Build beautiful focus backup JSON payload
+                val backupJson = JSONObject().apply {
+                    put("focus_records_list", focusRecordsSerialized)
+                    put("total_focus_minutes", totalMinutes)
+                    put("today_pomos_count", pomosCount)
+                    put("last_sync_timestamp", System.currentTimeMillis())
+                    put("device_model", android.os.Build.MODEL)
                 }
-            }
+                val contentStr = backupJson.toString()
 
-            // 4. Upload/Patch the content to Google Drive
-            val uploadSuccess = uploadBackupFileContent(token, fileId, contentStr)
-            if (uploadSuccess) {
-                // Save last synced timestamp locally
-                prefs.edit().putLong("gd_focus_last_sync_timestamp", System.currentTimeMillis()).apply()
-                Pair(true, "Successfully backed up focus history to Google Drive.")
-            } else {
-                Pair(false, "Failed to upload focus data to Google Drive.")
+                // 3. Find if the file already exists in AppData
+                var fileId = findBackupFileId(token)
+                if (fileId == null) {
+                    // Not found, create new file metadata first
+                    Log.i(TAG, "Backup file not found in Google Drive. Creating a new one...")
+                    fileId = createBackupFileMetadata(token)
+                    if (fileId == null) {
+                        return@withLock Pair(false, "Failed to initialize backup space in Google Drive.")
+                    }
+                }
+
+                // 4. Upload/Patch the content to Google Drive
+                val uploadSuccess = uploadBackupFileContent(token, fileId, contentStr)
+                if (uploadSuccess) {
+                    // Save last synced timestamp locally
+                    prefs.edit().putLong("gd_focus_last_sync_timestamp", System.currentTimeMillis()).apply()
+                    Pair(true, "Successfully backed up focus history to Google Drive.")
+                } else {
+                    Pair(false, "Failed to upload focus data to Google Drive.")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error backing up focus data: ${e.message}", e)
+                Pair(false, "Sync Error: ${e.localizedMessage ?: "Unknown error"}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error backing up focus data: ${e.message}", e)
-            Pair(false, "Sync Error: ${e.localizedMessage ?: "Unknown error"}")
         }
     }
 
@@ -127,60 +132,62 @@ object GoogleDriveSyncManager {
         context: Context,
         onAuthResolutionRequired: (Intent) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val token = getAccessToken(context, onAuthResolutionRequired)
-            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+        driveMutex.withLock {
+            val token = getAccessToken(context, onAuthResolutionRequired)
+                ?: return@withLock Pair(false, "Authorization required. Please connect your Google Drive.")
 
-        try {
-            // 1. Find the backup file in AppData folder
-            val fileId = findBackupFileId(token)
-                ?: return@withContext Pair(false, "No backup file found on your Google Drive. Save a backup first.")
+            try {
+                // 1. Find the backup file in AppData folder
+                val fileId = findBackupFileId(token)
+                    ?: return@withLock Pair(false, "No backup file found on your Google Drive. Save a backup first.")
 
-            // 2. Download backup content
-            val contentStr = downloadBackupFileContent(token, fileId)
-                ?: return@withContext Pair(false, "Failed to read backup from Google Drive.")
+                // 2. Download backup content
+                val contentStr = downloadBackupFileContent(token, fileId)
+                    ?: return@withLock Pair(false, "Failed to read backup from Google Drive.")
 
-            val backupJson = JSONObject(contentStr)
-            val remoteSerializedRecords = backupJson.optString("focus_records_list", "")
-            val remoteTotalMinutes = backupJson.optInt("total_focus_minutes", 0)
-            val remotePomosCount = backupJson.optInt("today_pomos_count", 0)
+                val backupJson = JSONObject(contentStr)
+                val remoteSerializedRecords = backupJson.optString("focus_records_list", "")
+                val remoteTotalMinutes = backupJson.optInt("total_focus_minutes", 0)
+                val remotePomosCount = backupJson.optInt("today_pomos_count", 0)
 
-            // 3. Load local focus records
-            val localRecords = FocusTimerManager.loadFocusRecords(context)
-            
-            // Parse remote records from the serialized string
-            val remoteRecords = parseSerializedFocusRecords(remoteSerializedRecords)
+                // 3. Load local focus records
+                val localRecords = FocusTimerManager.loadFocusRecords(context)
+                
+                // Parse remote records from the serialized string
+                val remoteRecords = parseSerializedFocusRecords(remoteSerializedRecords)
 
-            // 4. Reconciliation: Merge lists and keep unique records (using unique key combination)
-            val mergedRecords = (localRecords + remoteRecords).distinctBy { record ->
-                "${record.startTime}_${record.endTime}_${record.taskTitle}_${record.durationSeconds}"
+                // 4. Reconciliation: Merge lists and keep unique records (using unique key combination)
+                val mergedRecords = (localRecords + remoteRecords).distinctBy { record ->
+                    "${record.startTime}_${record.endTime}_${record.taskTitle}_${record.durationSeconds}"
+                }
+
+                // 5. Update local storage
+                FocusTimerManager.saveFocusRecords(context, mergedRecords)
+                
+                // Overwrite total stats with max values or merged values to preserve progress
+                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                val finalTotalMinutes = maxOf(prefs.getInt("total_focus_minutes", 0), remoteTotalMinutes, mergedRecords.sumOf { it.durationMinutes })
+                val finalPomosCount = maxOf(prefs.getInt("today_pomos_count", 0), remotePomosCount)
+
+                prefs.edit().apply {
+                    putInt("total_focus_minutes", finalTotalMinutes)
+                    putInt("today_pomos_count", finalPomosCount)
+                    putLong("gd_focus_last_sync_timestamp", System.currentTimeMillis())
+                    apply()
+                }
+
+                // 6. Update FocusTimerManager live states on main thread
+                withContext(Dispatchers.Main) {
+                    FocusTimerManager.focusRecords.value = mergedRecords
+                    FocusTimerManager.totalFocusMinutes.value = finalTotalMinutes
+                    FocusTimerManager.todayPomosCount.value = finalPomosCount
+                }
+
+                Pair(true, "Successfully restored and merged ${remoteRecords.size} focus records from Google Drive!")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring focus data: ${e.message}", e)
+                Pair(false, "Restore Error: ${e.localizedMessage ?: "Unknown error"}")
             }
-
-            // 5. Update local storage
-            FocusTimerManager.saveFocusRecords(context, mergedRecords)
-            
-            // Overwrite total stats with max values or merged values to preserve progress
-            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-            val finalTotalMinutes = maxOf(prefs.getInt("total_focus_minutes", 0), remoteTotalMinutes, mergedRecords.sumOf { it.durationMinutes })
-            val finalPomosCount = maxOf(prefs.getInt("today_pomos_count", 0), remotePomosCount)
-
-            prefs.edit().apply {
-                putInt("total_focus_minutes", finalTotalMinutes)
-                putInt("today_pomos_count", finalPomosCount)
-                putLong("gd_focus_last_sync_timestamp", System.currentTimeMillis())
-                apply()
-            }
-
-            // 6. Update FocusTimerManager live states on main thread
-            withContext(Dispatchers.Main) {
-                FocusTimerManager.focusRecords.value = mergedRecords
-                FocusTimerManager.totalFocusMinutes.value = finalTotalMinutes
-                FocusTimerManager.todayPomosCount.value = finalPomosCount
-            }
-
-            Pair(true, "Successfully restored and merged ${remoteRecords.size} focus records from Google Drive!")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error restoring focus data: ${e.message}", e)
-            Pair(false, "Restore Error: ${e.localizedMessage ?: "Unknown error"}")
         }
     }
 
@@ -193,67 +200,69 @@ object GoogleDriveSyncManager {
         database: com.example.data.AppDatabase,
         onAuthResolutionRequired: (Intent) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val token = getAccessToken(context, onAuthResolutionRequired)
-            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+        driveMutex.withLock {
+            val token = getAccessToken(context, onAuthResolutionRequired)
+                ?: return@withLock Pair(false, "Authorization required. Please connect your Google Drive.")
 
-        try {
-            // 1. Create a temp file to hold our zip backup
-            val tempFile = java.io.File(context.cacheDir, "temp_app_data_backup.zip")
-            if (tempFile.exists()) tempFile.delete()
-
-            // 2. Export database and files to the temp zip file
-            val exportSuccess = tempFile.outputStream().use { fos ->
-                DatabaseBackupHelper.exportDataToStream(context, database, fos)
-            }
-
-            if (!exportSuccess) {
+            try {
+                // 1. Create a temp file to hold our zip backup
+                val tempFile = java.io.File(context.cacheDir, "temp_app_data_backup.zip")
                 if (tempFile.exists()) tempFile.delete()
-                return@withContext Pair(false, "Failed to compile backup package locally.")
-            }
 
-            // 3. Find if the file already exists in AppData
-            var fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
-            if (fileId == null) {
-                fileId = createFileMetadata(token, ALL_DATA_BACKUP_FILE_NAME)
+                // 2. Export database and files to the temp zip file
+                val exportSuccess = tempFile.outputStream().use { fos ->
+                    DatabaseBackupHelper.exportDataToStream(context, database, fos)
+                }
+
+                if (!exportSuccess) {
+                    if (tempFile.exists()) tempFile.delete()
+                    return@withLock Pair(false, "Failed to compile backup package locally.")
+                }
+
+                // 3. Find if the file already exists in AppData
+                var fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
                 if (fileId == null) {
-                    tempFile.delete()
-                    return@withContext Pair(false, "Failed to initialize backup slot in Google Drive.")
+                    fileId = createFileMetadata(token, ALL_DATA_BACKUP_FILE_NAME)
+                    if (fileId == null) {
+                        tempFile.delete()
+                        return@withLock Pair(false, "Failed to initialize backup slot in Google Drive.")
+                    }
                 }
-            }
 
-            // 4. Upload the zip binary
-            val bytes = tempFile.readBytes()
-            val requestBody = bytes.toRequestBody("application/zip".toMediaType())
-            val url = "https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media"
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer $token")
-                .addHeader("Content-Type", "application/zip")
-                .patch(requestBody)
-                .build()
+                // 4. Upload the zip binary
+                val bytes = tempFile.readBytes()
+                val requestBody = bytes.toRequestBody("application/zip".toMediaType())
+                val url = "https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Content-Type", "application/zip")
+                    .patch(requestBody)
+                    .build()
 
-            var uploadSuccess = false
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    uploadSuccess = true
+                var uploadSuccess = false
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        uploadSuccess = true
+                    } else {
+                        Log.e(TAG, "Error uploading zip: code=${response.code} body=${response.body?.string()}")
+                    }
+                }
+
+                // Clean up
+                tempFile.delete()
+
+                if (uploadSuccess) {
+                    val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
+                    Pair(true, "Successfully backed up all app data and files to Google Drive.")
                 } else {
-                    Log.e(TAG, "Error uploading zip: code=${response.code} body=${response.body?.string()}")
+                    Pair(false, "Failed to upload backup package to Google Drive.")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error backing up all app data", e)
+                Pair(false, "Backup Error: ${e.localizedMessage ?: "Unknown error"}")
             }
-
-            // Clean up
-            tempFile.delete()
-
-            if (uploadSuccess) {
-                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
-                Pair(true, "Successfully backed up all app data and files to Google Drive.")
-            } else {
-                Pair(false, "Failed to upload backup package to Google Drive.")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error backing up all app data", e)
-            Pair(false, "Backup Error: ${e.localizedMessage ?: "Unknown error"}")
         }
     }
 
@@ -266,61 +275,161 @@ object GoogleDriveSyncManager {
         database: com.example.data.AppDatabase,
         onAuthResolutionRequired: (Intent) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val token = getAccessToken(context, onAuthResolutionRequired)
-            ?: return@withContext Pair(false, "Authorization required. Please connect your Google Drive.")
+        driveMutex.withLock {
+            val token = getAccessToken(context, onAuthResolutionRequired)
+                ?: return@withLock Pair(false, "Authorization required. Please connect your Google Drive.")
 
+            try {
+                // 1. Find the file ID in Google Drive
+                val fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
+                    ?: return@withLock Pair(false, "No full app data backup found on Google Drive. Save a backup first.")
+
+                // 2. Download zip content
+                val url = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+
+                val tempFile = java.io.File(context.cacheDir, "temp_app_data_restore.zip")
+                if (tempFile.exists()) tempFile.delete()
+
+                var downloadSuccess = false
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        response.body?.byteStream()?.use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        downloadSuccess = true
+                    } else {
+                        Log.e(TAG, "Failed downloading zip backup: code=${response.code}")
+                    }
+                }
+
+                if (!downloadSuccess) {
+                    tempFile.delete()
+                    return@withLock Pair(false, "Failed to download backup package from Google Drive.")
+                }
+
+                // 3. Import data from temp zip file
+                val importSuccess = tempFile.inputStream().use { fis ->
+                    DatabaseBackupHelper.importDataFromStream(context, database, fis)
+                }
+
+                tempFile.delete()
+
+                if (importSuccess) {
+                    val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
+                    Pair(true, "Successfully restored all app data and files from Google Drive!")
+                } else {
+                    Pair(false, "Failed to restore downloaded backup package.")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring all app data", e)
+                Pair(false, "Restore Error: ${e.localizedMessage ?: "Unknown error"}")
+            }
+        }
+    }
+
+    /**
+     * Queries Google Drive to find the size of the uploaded backups.
+     * Returns a map of file name to size in bytes.
+     */
+    suspend fun getBackupSizes(context: Context): Map<String, Long> = withContext(Dispatchers.IO) {
+        val token = getAccessToken(context) ?: return@withContext emptyMap()
+        val result = mutableMapOf<String, Long>()
         try {
-            // 1. Find the file ID in Google Drive
-            val fileId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
-                ?: return@withContext Pair(false, "No full app data backup found on Google Drive. Save a backup first.")
-
-            // 2. Download zip content
-            val url = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+            val url = "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,size)"
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Authorization", "Bearer $token")
+                .addHeader("Accept", "application/json")
                 .get()
                 .build()
 
-            val tempFile = java.io.File(context.cacheDir, "temp_app_data_restore.zip")
-            if (tempFile.exists()) tempFile.delete()
-
-            var downloadSuccess = false
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    response.body?.byteStream()?.use { input ->
-                        tempFile.outputStream().use { output ->
-                            input.copyTo(output)
+                    val bodyStr = response.body?.string() ?: ""
+                    val filesArray = JSONObject(bodyStr).optJSONArray("files")
+                    if (filesArray != null) {
+                        for (i in 0 until filesArray.length()) {
+                            val fileObj = filesArray.getJSONObject(i)
+                            val name = fileObj.optString("name", "")
+                            val size = fileObj.optLong("size", 0L)
+                            if (name.isNotEmpty()) {
+                                result[name] = size
+                            }
                         }
                     }
-                    downloadSuccess = true
-                } else {
-                    Log.e(TAG, "Failed downloading zip backup: code=${response.code}")
                 }
             }
-
-            if (!downloadSuccess) {
-                tempFile.delete()
-                return@withContext Pair(false, "Failed to download backup package from Google Drive.")
-            }
-
-            // 3. Import data from temp zip file
-            val importSuccess = tempFile.inputStream().use { fis ->
-                DatabaseBackupHelper.importDataFromStream(context, database, fis)
-            }
-
-            tempFile.delete()
-
-            if (importSuccess) {
-                val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putLong("gd_all_last_sync_timestamp", System.currentTimeMillis()).apply()
-                Pair(true, "Successfully restored all app data and files from Google Drive!")
-            } else {
-                Pair(false, "Failed to restore downloaded backup package.")
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error restoring all app data", e)
-            Pair(false, "Restore Error: ${e.localizedMessage ?: "Unknown error"}")
+            Log.e(TAG, "Error fetching backup sizes from Google Drive: ${e.message}", e)
+        }
+        result
+    }
+
+    /**
+     * Checks if any backup data exists in Google Drive.
+     */
+    suspend fun hasExistingBackupData(context: Context): Boolean = withContext(Dispatchers.IO) {
+        val token = getAccessToken(context) ?: return@withContext false
+        try {
+            val focusId = findFileId(token, BACKUP_FILE_NAME)
+            val dbId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
+            focusId != null || dbId != null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking existing backup data", e)
+            false
+        }
+    }
+
+    /**
+     * Reconciles/Retrieves whichever backup files exist in Google Drive.
+     */
+    suspend fun checkAndRetrieveDriveData(context: Context, database: com.example.data.AppDatabase): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val token = getAccessToken(context)
+            ?: return@withContext Pair(false, "Authentication required.")
+        
+        try {
+            val focusId = findFileId(token, BACKUP_FILE_NAME)
+            val dbId = findFileId(token, ALL_DATA_BACKUP_FILE_NAME)
+            
+            if (focusId == null && dbId == null) {
+                return@withContext Pair(false, "No existing backup files found.")
+            }
+            
+            val results = mutableListOf<String>()
+            var anySuccess = false
+            
+            if (dbId != null) {
+                val (success, msg) = restoreAllAppData(context, database)
+                if (success) {
+                    anySuccess = true
+                    results.add("App database restored.")
+                } else {
+                    results.add("App database restore failed: $msg")
+                }
+            }
+            
+            if (focusId != null) {
+                val (success, msg) = restoreFocusData(context)
+                if (success) {
+                    anySuccess = true
+                    results.add("Focus data restored.")
+                } else {
+                    results.add("Focus data restore failed: $msg")
+                }
+            }
+            
+            Pair(anySuccess, results.joinToString("\n"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in checkAndRetrieveDriveData", e)
+            Pair(false, e.localizedMessage ?: "Unknown restore error.")
         }
     }
 
@@ -473,6 +582,187 @@ object GoogleDriveSyncManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing serialized focus records: ${e.message}")
             emptyList()
+        }
+    }
+
+    /**
+     * Uploads a physical media file to standard Google Drive (outside appDataFolder, under "LifeOS_Shared_Media" folder),
+     * sets public read permissions on it, and returns its public sharing link.
+     */
+    suspend fun uploadPublicMediaFileDirect(
+        context: Context,
+        accessToken: String,
+        file: java.io.File
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            // 1. Check if the "LifeOS_Shared_Media" folder exists, if not create it
+            val folderId = findOrCreateSharedFolder(accessToken, "LifeOS_Shared_Media") ?: return@withContext null
+
+            // 2. Check if file already exists in that folder to avoid duplicates
+            val existingFileId = findFileInFolder(accessToken, file.name, folderId)
+            val fileId = if (existingFileId != null) {
+                existingFileId
+            } else {
+                // Create file metadata in that folder
+                val createdId = createFileMetadataInFolder(accessToken, file.name, folderId) ?: return@withContext null
+                // Upload content
+                val mimeType = getMimeType(file)
+                val uploadUrl = "https://www.googleapis.com/upload/drive/v3/files/$createdId?uploadType=media"
+                val request = Request.Builder()
+                    .url(uploadUrl)
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .addHeader("Content-Type", mimeType)
+                    .patch(file.readBytes().toRequestBody(mimeType.toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.e(TAG, "Failed uploading public file content for ${file.name}: code=${response.code}")
+                        return@withContext null
+                    }
+                }
+                createdId
+            }
+
+            // 3. Make file public (accessible to anyone with link as reader)
+            makeFilePublic(accessToken, fileId)
+
+            // 4. Return sharing direct download link
+            "https://drive.google.com/uc?export=download&id=$fileId"
+        } catch (e: Exception) {
+            Log.e(TAG, "Error uploading public media file ${file.name}", e)
+            null
+        }
+    }
+
+    private fun findOrCreateSharedFolder(token: String, folderName: String): String? {
+        try {
+            // Find folder
+            val query = "name = '$folderName' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQuery&fields=files(id)"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    val files = JSONObject(body).getJSONArray("files")
+                    if (files.length() > 0) {
+                        return files.getJSONObject(0).getString("id")
+                    }
+                }
+            }
+
+            // Create folder
+            val createUrl = "https://www.googleapis.com/drive/v3/files"
+            val body = JSONObject().apply {
+                put("name", folderName)
+                put("mimeType", "application/vnd.google-apps.folder")
+            }
+            val createRequest = Request.Builder()
+                .url(createUrl)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            client.newCall(createRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    return JSONObject(response.body?.string() ?: "").getString("id")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in findOrCreateSharedFolder", e)
+        }
+        return null
+    }
+
+    private fun findFileInFolder(token: String, name: String, folderId: String): String? {
+        try {
+            val query = "name = '$name' and '$folderId' in parents and trashed = false"
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQuery&fields=files(id)"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    val files = JSONObject(body).getJSONArray("files")
+                    if (files.length() > 0) {
+                        return files.getJSONObject(0).getString("id")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in findFileInFolder", e)
+        }
+        return null
+    }
+
+    private fun createFileMetadataInFolder(token: String, name: String, folderId: String): String? {
+        try {
+            val url = "https://www.googleapis.com/drive/v3/files"
+            val body = JSONObject().apply {
+                put("name", name)
+                val parents = org.json.JSONArray().apply { put(folderId) }
+                put("parents", parents)
+            }
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    return JSONObject(response.body?.string() ?: "").getString("id")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in createFileMetadataInFolder", e)
+        }
+        return null
+    }
+
+    private fun makeFilePublic(token: String, fileId: String) {
+        try {
+            val url = "https://www.googleapis.com/drive/v3/files/$fileId/permissions"
+            val body = JSONObject().apply {
+                put("role", "reader")
+                put("type", "anyone")
+            }
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Failed to make file $fileId public: code=${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in makeFilePublic", e)
+        }
+    }
+
+    private fun getMimeType(file: java.io.File): String {
+        val ext = file.extension.lowercase()
+        return when (ext) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "mp4" -> "video/mp4"
+            "3gp" -> "video/3gpp"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "m4a" -> "audio/mp4"
+            else -> "application/octet-stream"
         }
     }
 }

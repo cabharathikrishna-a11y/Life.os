@@ -36,6 +36,9 @@ object AppBlockHelper {
      */
     fun initializeStrictAppsIfNeeded(context: Context) {
         val strictPrefs = context.getSharedPreferences("strict_mode_prefs", Context.MODE_PRIVATE)
+        if (!strictPrefs.contains("strict_mode_enabled")) {
+            strictPrefs.edit().putBoolean("strict_mode_enabled", true).apply()
+        }
         if (!strictPrefs.getBoolean("strict_apps_initialized_v2", false)) {
             val defaultStrict = mutableSetOf<String>()
             if (isAppInstalled(context, "com.instagram.android")) {
@@ -139,6 +142,12 @@ object AppBlockHelper {
      */
     fun setBlockedApps(context: Context, apps: Set<String>) {
         getPrefs(context).edit().putStringSet(KEY_BLOCKED_APPS, apps).apply()
+        
+        // Also add any of these apps to strict mode blocked packages
+        val strictPrefs = context.getSharedPreferences("strict_mode_prefs", Context.MODE_PRIVATE)
+        val strictSet = strictPrefs.getStringSet("blocked_packages", emptySet())?.toMutableSet() ?: mutableSetOf()
+        strictSet.addAll(apps)
+        strictPrefs.edit().putStringSet("blocked_packages", strictSet).apply()
     }
 
     /**
@@ -251,15 +260,69 @@ object AppBlockHelper {
         editor.apply()
     }
 
+    fun isPackageBlockedInStrictMode(context: Context, packageName: String): Boolean {
+        // 1. Exclude our own app
+        if (packageName == context.packageName) return false
+        
+        // 2. Exclude Google Gemini, WhatsApp, Chrome
+        val lowerPkg = packageName.lowercase()
+        if (lowerPkg.contains("gemini") || 
+            lowerPkg.contains("bard") || 
+            lowerPkg.contains("whatsapp") || 
+            lowerPkg.contains("chrome") ||
+            packageName == "com.google.android.apps.bard" ||
+            packageName == "com.whatsapp" ||
+            packageName == "com.android.chrome") {
+            return false
+        }
+        
+        // 3. Exclude essential apps: Phone, Messages, Contacts
+        if (lowerPkg.contains("dialer") || 
+            lowerPkg.contains("phone") || 
+            lowerPkg.contains("messaging") || 
+            lowerPkg.contains("message") ||
+            lowerPkg.contains("contacts") ||
+            lowerPkg.contains("contacts.android") ||
+            packageName == "com.google.android.dialer" ||
+            packageName == "com.android.phone" ||
+            packageName == "com.google.android.apps.messaging" ||
+            packageName == "com.android.messaging" ||
+            packageName == "com.google.android.contacts" ||
+            packageName == "com.android.contacts") {
+            return false
+        }
+        
+        // 4. Exclude system launchers / UI (Android OS components)
+        if (lowerPkg.contains("launcher") || 
+            lowerPkg.contains("systemui") || 
+            packageName == "android" || 
+            packageName == "com.android.systemui") {
+            return false
+        }
+        
+        // 5. Exclude system apps (unless it's an updated system app)
+        try {
+            val pm = context.packageManager
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+            val isUpdatedSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            if (isSystem && !isUpdatedSystem) {
+                return false
+            }
+        } catch (e: Exception) {
+            return false
+        }
+        
+        return true
+    }
+
     fun checkForegroundAppAndBlockIfNeeded(context: Context) {
         val isFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
         if (!isFocusing) return
 
         val strictPrefs = context.getSharedPreferences("strict_mode_prefs", Context.MODE_PRIVATE)
-        val blockedApps = strictPrefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
+        val strictEnabled = strictPrefs.getBoolean("strict_mode_enabled", true)
         
-        if (blockedApps.isEmpty()) return
-
         val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager ?: return
         val time = System.currentTimeMillis()
         val usageEvents = usageStatsManager.queryEvents(time - 2000, time)
@@ -274,15 +337,25 @@ object AppBlockHelper {
             }
         }
 
-        if (currentForegroundApp != null && blockedApps.contains(currentForegroundApp)) {
-            Log.w("AppBlocker", "Intercepted blocked app: $currentForegroundApp")
-            
-            val blockIntent = Intent(context, com.example.ui.AppBlockInterceptActivity::class.java).apply {
-                putExtra("INTERCEPTED_PACKAGE", currentForegroundApp)
-                putExtra("IS_LIMIT_BLOCK", false)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        if (currentForegroundApp != null) {
+            val isBlocked = if (strictEnabled) {
+                isPackageBlockedInStrictMode(context, currentForegroundApp)
+            } else {
+                val blockedApps = strictPrefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
+                blockedApps.contains(currentForegroundApp)
             }
-            context.startActivity(blockIntent)
+
+            if (isBlocked) {
+                Log.w("AppBlocker", "Intercepted blocked app: $currentForegroundApp")
+                
+                val blockIntent = Intent(context, com.example.ui.AppBlockInterceptActivity::class.java).apply {
+                    putExtra("INTERCEPTED_PACKAGE", currentForegroundApp)
+                    putExtra("IS_LIMIT_BLOCK", false)
+                    putExtra("IS_STRICT_MODE_INTERCEPT", strictEnabled)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                context.startActivity(blockIntent)
+            }
         }
     }
 }

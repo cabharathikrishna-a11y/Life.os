@@ -15,7 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 enum class Screen {
-    LOGIN, PROFILE_SETUP, PERMISSION_ONBOARDING, DEEPA_AI, SEARCH, TASKS, CALENDAR, TIMER, HABITS, COUNTDOWN, JOURNAL, CONTACTS, FILE_EXPLORER, FINANCES, ANALYTICS, SETTINGS
+    LOGIN, PROFILE_SETUP, PERMISSION_ONBOARDING, CALENDAR_OPTIMIZATION_ONBOARDING, DEEPA_AI, SEARCH, TASKS, CALENDAR, TIMER, HABITS, COUNTDOWN, JOURNAL, CONTACTS, FILE_EXPLORER, FINANCES, ANALYTICS, SETTINGS
 }
 
 data class ChatMessage(
@@ -62,6 +62,8 @@ data class FocusTimeState(
 )
 
 class AppViewModel(application: Application, private val repository: LocalRepository) : AndroidViewModel(application) {
+
+    val appDatabase: com.example.data.AppDatabase get() = repository.db
 
     // SharedPreferences to persist settings
     private val prefs = application.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
@@ -1066,7 +1068,8 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                     
                     val currentUserVal = _currentUserRemote.value
                     // Re-evaluate if profile setup is required
-                    val isProfileIncomplete = currentUserVal?.name.isNullOrEmpty() || currentUserVal?.emoji.isNullOrEmpty()
+                    val isTester = prefs.getBoolean("is_tester_mode", false)
+                    val isProfileIncomplete = !isTester && (currentUserVal?.name.isNullOrEmpty() || currentUserVal?.emoji.isNullOrEmpty())
                     if (isProfileIncomplete) {
                         if (_currentScreen.value != Screen.PROFILE_SETUP) {
                             navigateTo(Screen.PROFILE_SETUP)
@@ -1157,10 +1160,17 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             val firstVisibleTab = visibleTabs.firstOrNull() ?: Screen.DEEPA_AI
             
             // Check if profile is complete. If so, open the first visible tab. Otherwise allow profile setup.
-            val isProfileIncomplete = _currentUserRemote.value?.name.isNullOrEmpty() || _currentUserRemote.value?.emoji.isNullOrEmpty()
+            val isTester = prefs.getBoolean("is_tester_mode", false)
+            val isProfileIncomplete = !isTester && (_currentUserRemote.value?.name.isNullOrEmpty() || _currentUserRemote.value?.emoji.isNullOrEmpty())
             if (!isProfileIncomplete) {
-                if (areMandatoryPermissionsGranted()) {
+                if (isTester) {
                     _currentScreen.value = firstVisibleTab
+                } else if (areMandatoryPermissionsGranted()) {
+                    if (com.example.util.SleepTimeHelper.isWakeUpAndSleepTimeSet(getApplication())) {
+                        _currentScreen.value = firstVisibleTab
+                    } else {
+                        _currentScreen.value = Screen.CALENDAR_OPTIMIZATION_ONBOARDING
+                    }
                 } else {
                     _currentScreen.value = Screen.PERMISSION_ONBOARDING
                 }
@@ -1245,6 +1255,20 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                         val users = if (response.isSuccessful) response.body() else null
                         if (users != null) {
                             val mutableUsers = users.toMutableMap()
+                            // Sanitize per-session and per-day limits for all loaded users
+                            for ((username, userRemote) in mutableUsers) {
+                                var updatedUser = userRemote
+                                if (updatedUser.accumulatedTimeMs > 21600000L) {
+                                    updatedUser = updatedUser.copy(accumulatedTimeMs = 21600000L)
+                                }
+                                val records = updatedUser.todaysFocusRecords
+                                if (records != null && records.isNotEmpty()) {
+                                    val sanitizedRecords = FocusTimerManager.sanitizeRecordsList(records)
+                                    updatedUser = updatedUser.copy(todaysFocusRecords = sanitizedRecords)
+                                }
+                                mutableUsers[username] = updatedUser
+                            }
+
                             val me = _currentUsername.value
                             if (me != null) {
                                 mutableUsers[me]?.let { myRemote ->
@@ -2011,6 +2035,36 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     private val _googleContactsSyncStatus = MutableStateFlow("Ready")
     val googleContactsSyncStatus: StateFlow<String> = _googleContactsSyncStatus.asStateFlow()
 
+    // Google Tasks Live Sync status
+    private val _googleTasksSyncStatus = MutableStateFlow("Ready")
+    val googleTasksSyncStatus: StateFlow<String> = _googleTasksSyncStatus.asStateFlow()
+
+    fun syncGoogleTasks(context: android.content.Context, onAuthRequired: (android.content.Intent) -> Unit = {}) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _googleTasksSyncStatus.value = "Syncing..."
+            try {
+                val result = com.example.util.GoogleTasksSyncManager.syncTasks(context, onAuthRequired)
+                if (result.first) {
+                    _googleTasksSyncStatus.value = "Sync successful!"
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    _googleTasksSyncStatus.value = "Sync failed: ${result.second}"
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AppViewModel", "Google Tasks sync failed", e)
+                _googleTasksSyncStatus.value = "Sync failed: ${e.localizedMessage}"
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Sync failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     fun syncGoogleContacts(context: android.content.Context, onAuthRequired: (android.content.Intent) -> Unit = {}) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _googleContactsSyncStatus.value = "Syncing..."
@@ -2079,6 +2133,26 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         }
     }
 
+    fun activateTesterMode() {
+        prefs.edit()
+            .putBoolean("is_tester_mode", true)
+            .putString("current_username", "tester_mode_user")
+            .putBoolean("is_logged_in", true)
+            .apply()
+        
+        setLoggedIn(
+            username = "tester_mode_user",
+            isAdminUser = false,
+            userRemote = com.example.api.UserRemote(
+                name = "Tester",
+                nickname = "Tester Mode",
+                emoji = "🕵️"
+            )
+        )
+        
+        navigateTo(Screen.DEEPA_AI)
+    }
+
     fun setLoggedIn(username: String, isAdminUser: Boolean, userRemote: com.example.api.UserRemote?) {
         _isLoggedIn.value = true
         _isAdmin.value = isAdminUser
@@ -2138,12 +2212,13 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                 val user = users?.get(username)
                 
                 val userToSet = if (user != null) {
-                    user.copy(isGoogleUser = true, email = email)
+                    user.copy(isGoogleUser = true, email = email, status = "active")
                 } else {
                     com.example.api.UserRemote(
                         name = displayName,
                         isGoogleUser = true,
-                        email = email
+                        email = email,
+                        status = "active"
                     )
                 }
                 
@@ -2253,9 +2328,10 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                         }
                         editor.apply()
                         
-                        val isProfileIncomplete = remoteUser.name.isNullOrEmpty() || remoteUser.emoji.isNullOrEmpty()
+                        val isTester = prefs.getBoolean("is_tester_mode", false)
+                        val isProfileIncomplete = !isTester && (remoteUser.name.isNullOrEmpty() || remoteUser.emoji.isNullOrEmpty())
                         if (!isProfileIncomplete && _currentScreen.value == Screen.PROFILE_SETUP) {
-                            if (areMandatoryPermissionsGranted()) {
+                            if (isTester || areMandatoryPermissionsGranted()) {
                                 navigateTo(getDefaultScreen())
                             } else {
                                 navigateTo(Screen.PERMISSION_ONBOARDING)
@@ -2418,18 +2494,57 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     }
 
     fun logout() {
+        val username = _currentUsername.value
+        val userRemote = _currentUserRemote.value
+        val isTester = prefs.getBoolean("is_tester_mode", false)
+
+        if (username != null && userRemote != null && !isTester) {
+            viewModelScope.launch {
+                try {
+                    com.example.api.FirebaseClient.api.putUser(
+                        username,
+                        userRemote.copy(focusStatus = "idle", isFocusing = false, status = "logged_out")
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("AppViewModel", "Failed to update Firebase status on logout", e)
+                }
+            }
+        }
+
         _isLoggedIn.value = false
         _isAdmin.value = false
         _currentUsername.value = null
         _currentUserRemote.value = null
-        prefs.edit()
-            .putBoolean("is_logged_in", false)
-            .putBoolean("is_admin", false)
-            .remove("current_username")
-            .apply()
+
+        val context = getApplication<android.app.Application>()
+        if (isTester) {
+            viewModelScope.launch {
+                try {
+                    repository.db.clearAllTables()
+                } catch (e: Exception) {
+                    android.util.Log.e("AppViewModel", "Failed to clear tables on tester logout", e)
+                }
+                prefs.edit().clear().apply()
+                
+                val calendarPrefs = context.getSharedPreferences("app_calendar_prefs", android.content.Context.MODE_PRIVATE)
+                calendarPrefs.edit().clear().apply()
+                
+                val strictPrefs = context.getSharedPreferences("strict_mode_prefs", android.content.Context.MODE_PRIVATE)
+                strictPrefs.edit().clear().apply()
+                
+                val countdownPrefs = context.getSharedPreferences("countdown_settings_prefs", android.content.Context.MODE_PRIVATE)
+                countdownPrefs.edit().clear().apply()
+            }
+        } else {
+            prefs.edit()
+                .putBoolean("is_logged_in", false)
+                .putBoolean("is_admin", false)
+                .remove("current_username")
+                .remove("is_tester_mode")
+                .apply()
+        }
         
         try {
-            val context = getApplication<android.app.Application>()
             com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(
                 context,
                 com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN
@@ -2439,6 +2554,52 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         }
 
         navigateTo(Screen.LOGIN)
+    }
+
+    fun deregisterAndUninstall(context: android.content.Context, onCompleted: () -> Unit) {
+        val username = _currentUsername.value
+        val userRemote = _currentUserRemote.value
+        viewModelScope.launch {
+            if (username != null && userRemote != null) {
+                try {
+                    com.example.api.FirebaseClient.api.putUser(
+                        username,
+                        userRemote.copy(focusStatus = "idle", isFocusing = false, status = "uninstalled")
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("AppViewModel", "Failed to update status to uninstalled in Firebase", e)
+                }
+            }
+            // Clear local preferences
+            prefs.edit().clear().apply()
+            
+            val calendarPrefs = context.getSharedPreferences("app_calendar_prefs", android.content.Context.MODE_PRIVATE)
+            calendarPrefs.edit().clear().apply()
+            
+            // Clear database
+            try {
+                repository.db.clearAllTables()
+            } catch (e: Exception) {
+                android.util.Log.e("AppViewModel", "Failed to clear tables", e)
+            }
+            
+            // Do standard VM reset
+            _isLoggedIn.value = false
+            _isAdmin.value = false
+            _currentUsername.value = null
+            _currentUserRemote.value = null
+            
+            try {
+                com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(
+                    context,
+                    com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN
+                ).signOut()
+            } catch (e: Exception) {
+                android.util.Log.e("AppViewModel", "Failed to sign out of Google", e)
+            }
+            
+            onCompleted()
+        }
     }
 
     fun areMandatoryPermissionsGranted(): Boolean {
@@ -2456,12 +2617,21 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     fun navigateTo(screen: Screen) {
         if (!_isLoggedIn.value && screen != Screen.LOGIN) {
             _currentScreen.value = Screen.LOGIN
+        } else if (_isLoggedIn.value && screen != Screen.LOGIN && screen != Screen.PROFILE_SETUP && screen != Screen.PERMISSION_ONBOARDING && screen != Screen.CALENDAR_OPTIMIZATION_ONBOARDING) {
+            if (!com.example.util.SleepTimeHelper.isWakeUpAndSleepTimeSet(getApplication())) {
+                _currentScreen.value = Screen.CALENDAR_OPTIMIZATION_ONBOARDING
+            } else {
+                _currentScreen.value = screen
+            }
         } else {
             _currentScreen.value = screen
         }
     }
 
     fun getDefaultScreen(): Screen {
+        if (!com.example.util.SleepTimeHelper.isWakeUpAndSleepTimeSet(getApplication())) {
+            return Screen.CALENDAR_OPTIMIZATION_ONBOARDING
+        }
         val visibleTabs = _tabOrder.value.filterNot { _hiddenTabs.value.contains(it) }
         return visibleTabs.firstOrNull() ?: Screen.DEEPA_AI
     }
@@ -5532,6 +5702,20 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         viewModelScope.launch {
             val result = com.example.util.DatabaseBackupHelper.exportData(context, repository.db, uri)
             onResult(result)
+        }
+    }
+
+    fun exportHtmlZip(context: android.content.Context, uri: android.net.Uri, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            var success = false
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { os ->
+                    success = com.example.util.DatabaseBackupHelper.exportHtmlZip(context, repository.db, os)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AppViewModel", "Failed to export HTML ZIP", e)
+            }
+            onResult(success)
         }
     }
 

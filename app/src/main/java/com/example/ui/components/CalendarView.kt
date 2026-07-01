@@ -135,6 +135,7 @@ fun parseTaskDuration(description: String): Int {
 
 @Composable
 fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val tasks by viewModel.tasks.collectAsState()
     val journalEntries by viewModel.journalEntries.collectAsState()
 
@@ -353,7 +354,7 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        // Automatic and silent Google Calendar Sync when screen is opened
+        // Automatic and silent Google Calendar and Google Tasks Sync when screen is opened
         val context = LocalContext.current
         LaunchedEffect(Unit) {
             val hasRead = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -365,6 +366,7 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
             if (hasRead && hasWrite) {
                 viewModel.syncGoogleCalendar(context)
             }
+            viewModel.syncGoogleTasks(context) { }
         }
 
         // Main Calendar content container card
@@ -903,6 +905,15 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
 
                         val scrollState = rememberScrollState()
 
+                        // Calendar Optimization & Notification settings variables
+                        val wakeUpTime = com.example.util.SleepTimeHelper.getWakeUpTime(context) ?: "07:00"
+                        val sleepTime = com.example.util.SleepTimeHelper.getSleepTime(context) ?: "22:00"
+                        val wakeUpHour = wakeUpTime.split(":").firstOrNull()?.toIntOrNull() ?: 7
+                        val sleepHour = sleepTime.split(":").firstOrNull()?.toIntOrNull() ?: 22
+
+                        var showEarlyHours by remember { mutableStateOf(false) }
+                        var showLateHours by remember { mutableStateOf(false) }
+
                         Column(modifier = Modifier.fillMaxSize()) {
                             // Top Day Identifier block
                             Row(
@@ -981,8 +992,46 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
 
                                     Spacer(modifier = Modifier.height(8.dp))
 
-                                    // Generate hours from 00:00 to 23:00
-                                    (0..23).forEach { hrInt ->
+                                    // 1. "Above Wake-Up Time" button if there are early hours and they are not shown yet
+                                    if (!showEarlyHours && wakeUpHour > 0) {
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                                .clickable { showEarlyHours = true },
+                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF09090C)),
+                                            border = BorderStroke(1.dp, WaterBlue.copy(alpha = 0.3f)),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.KeyboardArrowUp,
+                                                    contentDescription = "Show earlier hours",
+                                                    tint = WaterBlue,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Show hours before Wake-Up Time ($wakeUpTime) [ABOVE ALL TIMES]",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Generate active hours based on sleep optimization settings
+                                    val earlyHours = if (showEarlyHours) (0 until wakeUpHour).toList() else emptyList()
+                                    val coreHours = (wakeUpHour..sleepHour).toList()
+                                    val lateHours = if (showLateHours) ((sleepHour + 1)..23).toList() else emptyList()
+                                    val hoursToRender = earlyHours + coreHours + lateHours
+
+                                    hoursToRender.forEach { hrInt ->
                                         val hrStr = String.format(Locale.US, "%02d:00", hrInt)
                                         
                                         // Find tasks specifically scheduled or pre-assigned to this hour block
@@ -1127,6 +1176,39 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                                         }
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // 3. "Below Sleep Time" button if there are late hours and they are not shown yet
+                                    if (!showLateHours && sleepHour < 23) {
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                                .clickable { showLateHours = true },
+                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF09090C)),
+                                            border = BorderStroke(1.dp, WaterBlue.copy(alpha = 0.3f)),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                                    contentDescription = "Show later hours",
+                                                    tint = WaterBlue,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Show hours after Sleep Time ($sleepTime) [MORE THAN END TIME]",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
                                             }
                                         }
                                     }

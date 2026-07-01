@@ -104,18 +104,23 @@ fun LiveControlStopwatchBar(
     val selectedTag by viewModel.attachedTag.collectAsState()
 
     if (isStopwatchActive) {
-        TagInterlinkSearchVBar(
-            selectedTag = selectedTag,
-            onClear = { viewModel.attachTagToTimer("") },
-            onClick = { viewModel.setShowTagSelectionDialog(true) }
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TaskInterlinkSearchVBar(
-            selectedTask = selectedTask,
-            onClear = { viewModel.attachTaskToTimer(null) },
-            onClick = { viewModel.setShowTaskSelectionDialog(true) }
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            TagInterlinkSearchVBar(
+                selectedTag = selectedTag,
+                onClear = { viewModel.attachTagToTimer("") },
+                onClick = { viewModel.setShowTagSelectionDialog(true) },
+                modifier = Modifier.weight(1f)
+            )
+            TaskInterlinkSearchVBar(
+                selectedTask = selectedTask,
+                onClear = { viewModel.attachTaskToTimer(null) },
+                onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                modifier = Modifier.weight(1f)
+            )
+        }
         Spacer(modifier = Modifier.height(12.dp))
 
         Row(
@@ -163,18 +168,23 @@ fun LiveControlStopwatchBar(
             }
             Spacer(modifier = Modifier.height(12.dp))
 
-            TagInterlinkSearchVBar(
-                selectedTag = selectedTag,
-                onClear = { viewModel.attachTagToTimer("") },
-                onClick = { viewModel.setShowTagSelectionDialog(true) }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            TaskInterlinkSearchVBar(
-                selectedTask = selectedTask,
-                onClear = { viewModel.attachTaskToTimer(null) },
-                onClick = { viewModel.setShowTaskSelectionDialog(true) }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TagInterlinkSearchVBar(
+                    selectedTag = selectedTag,
+                    onClear = { viewModel.attachTagToTimer("") },
+                    onClick = { viewModel.setShowTagSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+                TaskInterlinkSearchVBar(
+                    selectedTask = selectedTask,
+                    onClear = { viewModel.attachTaskToTimer(null) },
+                    onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             Row(
@@ -200,18 +210,23 @@ fun LiveControlStopwatchBar(
                 }
             }
         } else {
-            TagInterlinkSearchVBar(
-                selectedTag = selectedTag,
-                onClear = { viewModel.attachTagToTimer("") },
-                onClick = { viewModel.setShowTagSelectionDialog(true) }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            TaskInterlinkSearchVBar(
-                selectedTask = selectedTask,
-                onClear = { viewModel.attachTaskToTimer(null) },
-                onClick = { viewModel.setShowTaskSelectionDialog(true) }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TagInterlinkSearchVBar(
+                    selectedTag = selectedTag,
+                    onClear = { viewModel.attachTagToTimer("") },
+                    onClick = { viewModel.setShowTagSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+                TaskInterlinkSearchVBar(
+                    selectedTask = selectedTask,
+                    onClear = { viewModel.attachTaskToTimer(null) },
+                    onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             Row(

@@ -65,6 +65,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         try {
+            // Set the global app context for Retrofit intercepting wrapper
+            com.example.api.FirebaseClient.appContext = applicationContext
+
             // Initialize default app blocks and strict mode lists
             com.example.util.AppBlockHelper.initializeStrictAppsIfNeeded(applicationContext)
             
@@ -155,10 +158,54 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                var showCelebrationDialog by remember { mutableStateOf(false) }
+                var updatedVersionCode by remember { mutableStateOf(0) }
+
                 LaunchedEffect(Unit) {
+                    val upgradedTo = com.example.util.AppUpdateManager.checkAndNotifyUpgradeComplete(context)
+                    if (upgradedTo != null) {
+                        updatedVersionCode = upgradedTo
+                        showCelebrationDialog = true
+                    }
                     if (!com.example.util.AppUpdateManager.isPauseUpdatesEnabled(context)) {
                         com.example.util.AppUpdateManager.checkForUpdates(context, manualCheck = false)
                     }
+                }
+
+                if (showCelebrationDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showCelebrationDialog = false },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Success Icon",
+                                    tint = com.example.ui.theme.WaterBlue,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Update Successful! 🎉", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+                            }
+                        },
+                        text = {
+                            Text(
+                                "Life OS has been successfully updated to Build $updatedVersionCode.\n\n" +
+                                "All your study statistics, task lists, and local backups remain completely safe and intact. Keep up the amazing focus!",
+                                color = Color.LightGray,
+                                fontSize = 13.sp
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = { showCelebrationDialog = false },
+                                colors = ButtonDefaults.buttonColors(containerColor = com.example.ui.theme.WaterBlue)
+                            ) {
+                                Text("Awesome!", color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        containerColor = Color(0xFF101014),
+                        shape = RoundedCornerShape(16.dp)
+                    )
                 }
 
                 if (showStartupUpdateDialog) {
@@ -362,6 +409,7 @@ class MainActivity : ComponentActivity() {
                                             Screen.LOGIN -> LoginView(viewModel = viewModel)
                                             Screen.PROFILE_SETUP -> ProfileSetupView(viewModel = viewModel)
                                             Screen.PERMISSION_ONBOARDING -> PermissionOnboardingView(viewModel = viewModel)
+                                            Screen.CALENDAR_OPTIMIZATION_ONBOARDING -> CalendarOptimizationOnboardingView(viewModel = viewModel)
                                             Screen.TASKS -> TaskEngineView(viewModel = viewModel)
                                             Screen.CALENDAR -> CalendarView(viewModel = viewModel)
                                             Screen.TIMER -> TimerView(viewModel = viewModel)
@@ -416,7 +464,7 @@ class MainActivity : ComponentActivity() {
                         }
                         if (alignMode == "horizontal" || alignMode == "top") {
                         Column(modifier = outerModifier) {
-                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
+                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING && currentScreen != Screen.CALENDAR_OPTIMIZATION_ONBOARDING) {
                                 // Top Horizontal pill-tab navigation bar (Floating Glass Dock)
                                 Box(
                                     modifier = Modifier
@@ -480,7 +528,7 @@ class MainActivity : ComponentActivity() {
                         Column(modifier = outerModifier) {
                             MainScaffoldContent(scaffoldModifier = Modifier.weight(1f).fillMaxWidth())
 
-                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
+                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING && currentScreen != Screen.CALENDAR_OPTIMIZATION_ONBOARDING) {
                                 // Bottom Horizontal pill-tab navigation bar (Floating Glass Dock)
                                 Box(
                                     modifier = Modifier
@@ -542,7 +590,7 @@ class MainActivity : ComponentActivity() {
                         Row(modifier = outerModifier) {
                             MainScaffoldContent(scaffoldModifier = Modifier.weight(1f).fillMaxHeight())
 
-                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
+                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING && currentScreen != Screen.CALENDAR_OPTIMIZATION_ONBOARDING) {
                             // Right-hand vertical tabs column (Floating Glass Rail)
                             Box(
                                 modifier = Modifier
@@ -610,7 +658,7 @@ class MainActivity : ComponentActivity() {
                         }
                     } else { // "left" or "vertical" or any other fallback
                         Row(modifier = outerModifier) {
-                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING) {
+                            if (!isKeyboardVisible && currentScreen != Screen.LOGIN && currentScreen != Screen.PROFILE_SETUP && currentScreen != Screen.PERMISSION_ONBOARDING && currentScreen != Screen.CALENDAR_OPTIMIZATION_ONBOARDING) {
                             // Left-hand vertical tabs column (Floating Glass Rail)
                             Box(
                                 modifier = Modifier

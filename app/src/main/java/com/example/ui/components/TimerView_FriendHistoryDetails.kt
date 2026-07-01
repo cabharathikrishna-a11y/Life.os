@@ -39,10 +39,18 @@ fun FriendHistoryDetailsContent(
     val WaterBlue = Color(0xFF38BDF8)
 
     val targetUser = allUsers[peer.username]
-    val rawFriendRecords = targetUser?.todaysFocusRecords ?: emptyList()
+    val lastUpdated = targetUser?.lastUpdatedTimestamp ?: 0L
+    val lastUpdatedDateStr = if (lastUpdated > 0) {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(lastUpdated))
+    } else {
+        ""
+    }
+    val isPeerStale = !peer.isMe && lastUpdatedDateStr.isNotEmpty() && lastUpdatedDateStr != todayStr
+
+    val rawFriendRecords = if (isPeerStale) emptyList() else (targetUser?.todaysFocusRecords ?: emptyList())
 
     // Retrieve/generate records for all dates in target range
-    val friendRecords = remember(peer.username, selectedFilter, rawFriendRecords) {
+    val friendRecords = remember(peer.username, selectedFilter, rawFriendRecords, isPeerStale) {
         val recordsList = mutableListOf<FocusRecord>()
         val sdfTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
 
@@ -123,7 +131,7 @@ fun FriendHistoryDetailsContent(
                         }
                     }
                 } else {
-                    val targetSeconds = if (targetUser != null) {
+                    val targetSeconds = if (targetUser != null && !isPeerStale) {
                         val isFocusing = targetUser.isFocusing == true
                         if (isFocusing && targetUser.lastResumeTimeMs != null) {
                             val currentChunkMs = System.currentTimeMillis() - targetUser.lastResumeTimeMs
@@ -264,12 +272,20 @@ fun FriendHistoryDetailsContent(
         UserAvatar(emojiOrBase64 = peer.emoji, size = 24.dp, fontSize = 20.sp)
         Spacer(modifier = Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "${peer.displayName}'s $selectedFilter Focus",
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = peer.displayName,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "(@${peer.username})",
+                    color = Color.Gray,
+                    fontSize = 11.sp
+                )
+            }
             val friendStatusText = when (peer.focusStatus) {
                 "focusing" -> "Live Focusing Now"
                 "paused" -> "Paused"

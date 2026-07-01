@@ -45,6 +45,7 @@ fun SettingsUpdatesPage(
     
     var githubOwner by remember { mutableStateOf(AppUpdateManager.getGithubOwner(context)) }
     var githubRepo by remember { mutableStateOf(AppUpdateManager.getGithubRepo(context)) }
+    var runningFirebaseCode by remember { mutableStateOf(AppUpdateManager.getRunningFirebaseVersion(context)) }
 
     // Check if there is an offline downloaded update ready to install
     val readyApkPath = remember(updateStatus) { AppUpdateManager.getReadyApkPath(context) }
@@ -105,11 +106,11 @@ fun SettingsUpdatesPage(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
-                            text = "CURRENT VERSION: $currentVersionName (BUILD $currentVersionCode)",
+                            text = "CURRENT VERSION: $currentVersionName (BUILD $currentVersionCode) | FIREBASE BUILD: $runningFirebaseCode",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.Gray,
-                            letterSpacing = 1.sp
+                            letterSpacing = 0.5.sp
                         )
 
                         Spacer(modifier = Modifier.height(4.dp))
@@ -367,6 +368,101 @@ fun SettingsUpdatesPage(
                                 },
                                 colors = SwitchDefaults.colors(checkedThumbColor = WaterBlue, checkedTrackColor = WaterBlue.copy(alpha = 0.4f))
                             )
+                        }
+                    }
+                }
+
+                // 3.5. Firebase Running Version Override
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0C0C0E)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "FIREBASE VERSION CONFIGURATION",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = WaterBlue,
+                            letterSpacing = 0.5.sp
+                        )
+
+                        Text(
+                            text = "To prevent infinite installation loops on GitHub automated builds, Life OS tracks your current running version code independently from the hardcoded package codebase. Adjust this value to bypass or enable system updates manually.",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Running Firebase Version", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (runningFirebaseCode > 1) {
+                                            runningFirebaseCode -= 1
+                                            AppUpdateManager.setRunningFirebaseVersion(context, runningFirebaseCode)
+                                            Toast.makeText(context, "Running Firebase version updated to Build $runningFirebaseCode", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.background(Color(0xFF1E1E24), RoundedCornerShape(4.dp)).size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowLeft,
+                                        contentDescription = "Decrease Version",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                Text(
+                                    text = runningFirebaseCode.toString(),
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp)
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        runningFirebaseCode += 1
+                                        AppUpdateManager.setRunningFirebaseVersion(context, runningFirebaseCode)
+                                        Toast.makeText(context, "Running Firebase version updated to Build $runningFirebaseCode", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.background(Color(0xFF1E1E24), RoundedCornerShape(4.dp)).size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowRight,
+                                        contentDescription = "Increase Version",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                runningFirebaseCode = currentVersionCode
+                                AppUpdateManager.setRunningFirebaseVersion(context, runningFirebaseCode)
+                                Toast.makeText(context, "Running Firebase version reset to match package code ($currentVersionCode)", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1E)),
+                            border = BorderStroke(1.dp, Color.DarkGray),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(38.dp)
+                        ) {
+                            Text("Reset to Package Build Code ($currentVersionCode)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

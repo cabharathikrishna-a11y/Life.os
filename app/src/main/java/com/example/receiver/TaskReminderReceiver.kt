@@ -26,6 +26,10 @@ class TaskReminderReceiver : BroadcastReceiver() {
             Log.d("TaskReminderReceiver", "Master silent mode is ON. Suppressing background notification and full-screen activity.")
             return
         }
+        if (com.example.util.SleepTimeHelper.isInSleepTime(context)) {
+            Log.d("TaskReminderReceiver", "Currently in sleep time. Suppressing background notification and full-screen activity.")
+            return
+        }
 
         val rawTaskId = intent.getIntExtra("TASK_ID", -1)
         val isAllDayCheck = intent.getBooleanExtra("IS_ALL_DAY_CHECK", false) || (rawTaskId == 9999)

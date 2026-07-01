@@ -266,6 +266,26 @@ object DatabaseBackupHelper {
             }
             root.put("finance_categories", categoriesArray)
 
+            val driveLinksJson = JSONObject()
+            try {
+                val accessToken = GoogleDriveSyncManager.getAccessToken(context)
+                if (accessToken != null) {
+                    val filesDir = com.example.util.StorageHelper.getAppFilesDir(context)
+                    val filesList = filesDir.listFiles() ?: emptyArray()
+                    filesList.forEach { file ->
+                        if (file.isFile && file.name != "backup_summary.txt" && file.name != "backup_data.json" && !file.name.endsWith(".zip")) {
+                            val sharingUrl = GoogleDriveSyncManager.uploadPublicMediaFileDirect(context, accessToken, file)
+                            if (sharingUrl != null) {
+                                driveLinksJson.put(file.name, sharingUrl)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error generating drive links during export", e)
+            }
+            root.put("drive_media_links", driveLinksJson)
+
             val jsonString = root.toString()
 
             // Calculate stats for backup_summary.txt
@@ -765,6 +785,28 @@ object DatabaseBackupHelper {
                 }
             }
 
+            // 17. Restore public Drive media links if they are not present locally
+            val driveLinks = root.optJSONObject("drive_media_links")
+            if (driveLinks != null) {
+                val keys = driveLinks.keys()
+                val filesDir = com.example.util.StorageHelper.getAppFilesDir(context)
+                while (keys.hasNext()) {
+                    val fileName = keys.next()
+                    val sharingUrl = driveLinks.optString(fileName, "")
+                    if (sharingUrl.isNotEmpty()) {
+                        val localFile = java.io.File(filesDir, fileName)
+                        if (!localFile.exists()) {
+                            try {
+                                downloadPublicFileDirect(sharingUrl, localFile)
+                                Log.d(TAG, "Successfully restored missing local file $fileName from Drive link")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to download missing file $fileName from Drive link: $sharingUrl", e)
+                            }
+                        }
+                    }
+                }
+            }
+
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed parseAndRestoreDb", e)
@@ -1001,5 +1043,620 @@ object DatabaseBackupHelper {
             }
         }
         return false
+    }
+
+    private fun downloadPublicFileDirect(urlStr: String, destFile: java.io.File) {
+        val client = okhttp3.OkHttpClient()
+        val request = okhttp3.Request.Builder()
+            .url(urlStr)
+            .get()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Failed to download file: HTTP ${response.code}")
+            }
+            destFile.parentFile?.mkdirs()
+            destFile.outputStream().use { fos ->
+                response.body?.byteStream()?.copyTo(fos)
+            }
+        }
+    }
+
+    suspend fun exportHtmlZip(context: Context, database: AppDatabase, outputStream: java.io.OutputStream): Boolean {
+        return try {
+            val tasks = database.taskDao().getAllTasks().first()
+            val journal = database.journalDao().getAllJournalEntries().first()
+            val ledger = database.ledgerDao().getAllLedgerEntries().first()
+            val habits = database.habitDao().getAllHabits().first()
+            val contacts = database.contactDao().getAllContacts().first()
+            val filesList = com.example.util.StorageHelper.getAppFilesDir(context).listFiles() ?: emptyArray()
+
+            val htmlContent = generateHtmlDashboard(tasks, journal, ledger, habits, contacts)
+
+            java.util.zip.ZipOutputStream(outputStream).use { zipOut ->
+                // 1. Write index.html
+                val htmlEntry = java.util.zip.ZipEntry("index.html")
+                zipOut.putNextEntry(htmlEntry)
+                val htmlWriter = java.io.BufferedWriter(java.io.OutputStreamWriter(zipOut, Charsets.UTF_8))
+                htmlWriter.write(htmlContent)
+                htmlWriter.flush()
+                zipOut.closeEntry()
+
+                // 2. Write all media files inside a "media/" folder
+                filesList.forEach { file ->
+                    if (file.isFile && file.name != "backup_summary.txt" && file.name != "backup_data.json" && !file.name.endsWith(".zip")) {
+                        val entryName = "media/${file.name}"
+                        val fileEntry = java.util.zip.ZipEntry(entryName)
+                        zipOut.putNextEntry(fileEntry)
+                        file.inputStream().use { input ->
+                            FileChunkHelper.copyStreamSecure(input, zipOut, bufferSize = 8192)
+                        }
+                        zipOut.closeEntry()
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export HTML ZIP", e)
+            false
+        }
+    }
+
+    private fun generateHtmlDashboard(
+        tasks: List<Task>,
+        journals: List<JournalEntry>,
+        ledger: List<LedgerEntry>,
+        habits: List<Habit>,
+        contacts: List<Contact>
+    ): String {
+        val tasksJson = JSONArray()
+        tasks.forEach {
+            tasksJson.put(JSONObject().apply {
+                put("title", it.title)
+                put("description", it.description)
+                put("isCompleted", it.isCompleted)
+                put("listCategory", it.listCategory)
+                put("priority", it.priority)
+                put("dueDateString", it.dueDateString)
+            })
+        }
+
+        val journalsJson = JSONArray()
+        journals.forEach {
+            journalsJson.put(JSONObject().apply {
+                put("title", it.title)
+                put("text", it.text)
+                put("dateString", it.dateString)
+                put("timestamp", it.timestamp)
+                put("attachmentsJson", it.attachmentsJson)
+            })
+        }
+
+        val ledgerJson = JSONArray()
+        ledger.forEach {
+            ledgerJson.put(JSONObject().apply {
+                put("type", it.type)
+                put("amount", it.amount)
+                put("categoryTag", it.categoryTag)
+                put("note", it.note)
+                put("timestamp", it.timestamp)
+            })
+        }
+
+        val habitsJson = JSONArray()
+        habits.forEach {
+            habitsJson.put(JSONObject().apply {
+                put("name", it.name)
+                put("streakCount", it.streakCount)
+                put("lastCompletedTimestamp", it.lastCompletedTimestamp ?: -1L)
+            })
+        }
+
+        val contactsJson = JSONArray()
+        contacts.forEach {
+            contactsJson.put(JSONObject().apply {
+                put("firstName", it.firstName)
+                put("lastName", it.lastName)
+                put("jobTitle", it.jobTitle)
+                put("email", it.email)
+                put("phone", it.phone)
+                put("photoUri", it.photoUri ?: "")
+                put("attachedFilesJson", it.attachedFilesJson)
+            })
+        }
+
+        return """
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LifeOS Offline Personal Archive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0d0d11;
+            color: #f3f4f6;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .tab-btn.active {
+            border-bottom: 2px solid #3b82f6;
+            color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <header class="border-b border-neutral-800 bg-[#121217] py-4 px-6 flex items-center justify-between shadow-md">
+        <div class="flex items-center space-x-3">
+            <span class="text-2xl">✨</span>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight text-white">LifeOS Personal Archive</h1>
+                <p class="text-xs text-neutral-400">Complete offline database and file companion</p>
+            </div>
+        </div>
+        <div class="text-xs text-neutral-500 bg-neutral-900 px-3 py-1.5 rounded-full border border-neutral-800">
+            Exported: <span id="export-date"></span>
+        </div>
+    </header>
+
+    <nav class="bg-[#121217] border-b border-neutral-800 px-6 flex space-x-6 text-sm overflow-x-auto">
+        <button onclick="switchTab('dashboard')" id="tab-dashboard" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white active">Dashboard</button>
+        <button onclick="switchTab('journals')" id="tab-journals" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white">Journals</button>
+        <button onclick="switchTab('tasks')" id="tab-tasks" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white">Tasks</button>
+        <button onclick="switchTab('contacts')" id="tab-contacts" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white">Contacts</button>
+        <button onclick="switchTab('finances')" id="tab-finances" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white">Finances</button>
+        <button onclick="switchTab('habits')" id="tab-habits" class="tab-btn py-4 font-medium transition text-neutral-400 hover:text-white">Habits</button>
+    </nav>
+
+    <main class="flex-1 p-6 max-w-7xl w-full mx-auto">
+        <section id="sect-dashboard" class="tab-content space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-[#15151b] p-5 rounded-xl border border-neutral-800 flex items-center justify-between">
+                    <div>
+                        <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Journals</p>
+                        <h3 id="stat-journals" class="text-3xl font-extrabold text-white mt-1">0</h3>
+                    </div>
+                    <span class="text-3xl">📓</span>
+                </div>
+                <div class="bg-[#15151b] p-5 rounded-xl border border-neutral-800 flex items-center justify-between">
+                    <div>
+                        <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Active Tasks</p>
+                        <h3 id="stat-tasks" class="text-3xl font-extrabold text-white mt-1">0</h3>
+                    </div>
+                    <span class="text-3xl">✅</span>
+                </div>
+                <div class="bg-[#15151b] p-5 rounded-xl border border-neutral-800 flex items-center justify-between">
+                    <div>
+                        <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Contacts</p>
+                        <h3 id="stat-contacts" class="text-3xl font-extrabold text-white mt-1">0</h3>
+                    </div>
+                    <span class="text-3xl">👥</span>
+                </div>
+                <div class="bg-[#15151b] p-5 rounded-xl border border-neutral-800 flex items-center justify-between">
+                    <div>
+                        <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Habits Tracked</p>
+                        <h3 id="stat-habits" class="text-3xl font-extrabold text-white mt-1">0</h3>
+                    </div>
+                    <span class="text-3xl">🔥</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-[#121217] p-6 rounded-xl border border-neutral-800 shadow-md">
+                    <h2 class="text-lg font-bold text-white mb-4 flex items-center justify-between">
+                        <span>Latest Journal Entries</span>
+                        <button onclick="switchTab('journals')" class="text-xs text-blue-400 hover:underline">View All</button>
+                    </h2>
+                    <div id="recent-journals-list" class="space-y-4"></div>
+                </div>
+
+                <div class="bg-[#121217] p-6 rounded-xl border border-neutral-800 shadow-md">
+                    <h2 class="text-lg font-bold text-white mb-4 flex items-center justify-between">
+                        <span>Focus Tasks</span>
+                        <button onclick="switchTab('tasks')" class="text-xs text-blue-400 hover:underline">View All</button>
+                    </h2>
+                    <div id="recent-tasks-list" class="space-y-3"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="sect-journals" class="tab-content hidden space-y-4">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-[#121217] p-4 rounded-xl border border-neutral-800">
+                <input type="text" id="journal-search" oninput="renderJournals()" placeholder="Search journals by title or text..." class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                <select id="journal-sort" onchange="renderJournals()" class="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                </select>
+            </div>
+            <div id="journals-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+        </section>
+
+        <section id="sect-tasks" class="tab-content hidden space-y-4">
+            <div class="flex flex-col md:flex-row md:items-center gap-4 bg-[#121217] p-4 rounded-xl border border-neutral-800">
+                <input type="text" id="task-search" oninput="renderTasks()" placeholder="Search tasks..." class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                <select id="task-filter-status" onchange="renderTasks()" class="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                    <option value="all">All Statuses</option>
+                    <option value="active">Active Only</option>
+                    <option value="completed">Completed Only</option>
+                </select>
+                <select id="task-filter-priority" onchange="renderTasks()" class="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                    <option value="all">All Priorities</option>
+                    <option value="HIGH">High Priority</option>
+                    <option value="MEDIUM">Medium Priority</option>
+                    <option value="LOW">Low Priority</option>
+                </select>
+            </div>
+            <div class="bg-[#121217] rounded-xl border border-neutral-800 overflow-hidden shadow-md">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-neutral-900 border-b border-neutral-800 text-xs font-bold uppercase text-neutral-400">
+                            <th class="py-3 px-4">Status</th>
+                            <th class="py-3 px-4">Task Details</th>
+                            <th class="py-3 px-4">Priority</th>
+                            <th class="py-3 px-4">Category</th>
+                            <th class="py-3 px-4">Due Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tasks-table-body" class="divide-y divide-neutral-800"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="sect-contacts" class="tab-content hidden space-y-4">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-[#121217] p-4 rounded-xl border border-neutral-800">
+                <input type="text" id="contact-search" oninput="renderContacts()" placeholder="Search contacts by name, email, title..." class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                <select id="contact-sort" onchange="renderContacts()" class="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                    <option value="name">Sort by Name</option>
+                    <option value="title">Sort by Job Title</option>
+                </select>
+            </div>
+            <div id="contacts-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+        </section>
+
+        <section id="sect-finances" class="tab-content hidden space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-[#121217] p-5 rounded-xl border border-neutral-800">
+                    <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Total Income</p>
+                    <h3 id="finance-income" class="text-2xl font-extrabold text-green-400 mt-1">${'$'}0.00</h3>
+                </div>
+                <div class="bg-[#121217] p-5 rounded-xl border border-neutral-800">
+                    <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Total Expenses</p>
+                    <h3 id="finance-expense" class="text-2xl font-extrabold text-red-400 mt-1">${'$'}0.00</h3>
+                </div>
+                <div class="bg-[#121217] p-5 rounded-xl border border-neutral-800">
+                    <p class="text-xs text-neutral-400 uppercase font-bold tracking-wider">Net Balance</p>
+                    <h3 id="finance-balance" class="text-2xl font-extrabold text-blue-400 mt-1">${'$'}0.00</h3>
+                </div>
+            </div>
+
+            <div class="flex flex-col md:flex-row md:items-center gap-4 bg-[#121217] p-4 rounded-xl border border-neutral-800">
+                <input type="text" id="finance-search" oninput="renderFinances()" placeholder="Search transactions by note or category..." class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                <select id="finance-filter-type" onchange="renderFinances()" class="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 text-white">
+                    <option value="all">All Transactions</option>
+                    <option value="INCOME">Income Only</option>
+                    <option value="EXPENSE">Expense Only</option>
+                </select>
+            </div>
+
+            <div class="bg-[#121217] rounded-xl border border-neutral-800 overflow-hidden shadow-md">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-neutral-900 border-b border-neutral-800 text-xs font-bold uppercase text-neutral-400">
+                            <th class="py-3 px-4">Date</th>
+                            <th class="py-3 px-4">Category</th>
+                            <th class="py-3 px-4">Note</th>
+                            <th class="py-3 px-4">Type</th>
+                            <th class="py-3 px-4 text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="finance-table-body" class="divide-y divide-neutral-800"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="sect-habits" class="tab-content hidden space-y-4">
+            <div id="habits-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+        </section>
+    </main>
+
+    <script>
+        const TASKS = ${'$'}{tasksJson.toString()};
+        const JOURNAL = ${'$'}{journalsJson.toString()};
+        const LEDGER = ${'$'}{ledgerJson.toString()};
+        const HABITS = ${'$'}{habitsJson.toString()};
+        const CONTACTS = ${'$'}{contactsJson.toString()};
+
+        document.getElementById('export-date').innerText = new Date().toLocaleDateString(undefined, {
+            year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+
+            document.getElementById('tab-' + tabId).classList.add('active');
+            document.getElementById('sect-' + tabId).classList.remove('hidden');
+        }
+
+        function getMediaUrl(path) {
+            if (!path) return '';
+            if (path.startsWith('http://') || path.startsWith('https://')) return path;
+            const parts = path.split('/');
+            const filename = parts[parts.length - 1];
+            return 'media/' + filename;
+        }
+
+        function getAttachmentHtml(attachment) {
+            if (!attachment) return '';
+            const lower = attachment.toLowerCase();
+            const url = getMediaUrl(attachment);
+            if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp')) {
+                return `<img class="w-full max-w-md rounded-lg border border-neutral-800 shadow-md mt-2" src="${'\$'}{url}" onerror="this.style.display='none'" />`;
+            } else if (lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.m4a') || lower.endsWith('.ogg')) {
+                return `<audio class="w-full max-w-sm mt-2" controls src="${'\$'}{url}"></audio>`;
+            } else if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.3gp')) {
+                return `<video class="w-full max-w-md rounded-lg border border-neutral-800 shadow-md mt-2" controls src="${'\$'}{url}"></video>`;
+            } else {
+                const parts = attachment.split('/');
+                const filename = parts[parts.length - 1];
+                return `<a href="${'\$'}{url}" download class="inline-flex items-center space-x-1.5 text-xs text-blue-400 hover:underline mt-2">📎 <span>Download file (${'\$'}{filename})</span></a>`;
+            }
+        }
+
+        function renderDashboard() {
+            document.getElementById('stat-journals').innerText = JOURNAL.length;
+            document.getElementById('stat-tasks').innerText = TASKS.filter(t => !t.isCompleted).length;
+            document.getElementById('stat-contacts').innerText = CONTACTS.length;
+            document.getElementById('stat-habits').innerText = HABITS.length;
+
+            const recentJournals = [...JOURNAL].sort((a,b) => b.timestamp - a.timestamp).slice(0, 3);
+            const rjContainer = document.getElementById('recent-journals-list');
+            if (recentJournals.length === 0) {
+                rjContainer.innerHTML = '<p class="text-xs text-neutral-500">No journal entries found.</p>';
+            } else {
+                rjContainer.innerHTML = recentJournals.map(entry => `
+                    <div class="p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-white">${'\$'}{entry.title || 'Untitled Entry'}</h4>
+                            <span class="text-xs text-neutral-500">${'\$'}{entry.dateString}</span>
+                        </div>
+                        <p class="text-xs text-neutral-400 mt-1.5 line-clamp-2">${'\$'}{entry.text || ''}</p>
+                    </div>
+                `).join('');
+            }
+
+            const activeTasks = TASKS.filter(t => !t.isCompleted).slice(0, 4);
+            const rtContainer = document.getElementById('recent-tasks-list');
+            if (activeTasks.length === 0) {
+                rtContainer.innerHTML = '<p class="text-xs text-neutral-500">All tasks completed! Great job.</p>';
+            } else {
+                rtContainer.innerHTML = activeTasks.map(task => `
+                    <div class="flex items-center justify-between p-2.5 bg-neutral-900 border border-neutral-800 rounded-lg">
+                        <div class="flex items-center space-x-2.5">
+                            <span class="w-2 h-2 rounded-full ${'\$'}{task.priority === 'HIGH' ? 'bg-red-500' : task.priority === 'MEDIUM' ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+                            <span class="text-sm text-neutral-200 font-medium">${'\$'}{task.title}</span>
+                        </div>
+                        <span class="text-[10px] text-neutral-500 bg-neutral-800 border border-neutral-700 px-2 py-0.5 rounded-full">${'\$'}{task.listCategory}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function renderJournals() {
+            const query = document.getElementById('journal-search').value.toLowerCase();
+            const sort = document.getElementById('journal-sort').value;
+
+            let filtered = JOURNAL.filter(j => 
+                (j.title && j.title.toLowerCase().includes(query)) || 
+                (j.text && j.text.toLowerCase().includes(query))
+            );
+
+            if (sort === 'newest') {
+                filtered.sort((a,b) => b.timestamp - a.timestamp);
+            } else {
+                filtered.sort((a,b) => a.timestamp - b.timestamp);
+            }
+
+            const grid = document.getElementById('journals-grid');
+            if (filtered.length === 0) {
+                grid.innerHTML = '<div class="col-span-full text-center text-neutral-500 py-12">No matching journal entries found.</div>';
+                return;
+            }
+
+            grid.innerHTML = filtered.map(entry => {
+                const attList = entry.attachmentsJson ? entry.attachmentsJson.split(';;').filter(Boolean) : [];
+                const attHtml = attList.map(getAttachmentHtml).join('');
+
+                return `
+                    <div class="bg-[#121217] border border-neutral-800 rounded-xl p-5 shadow-md flex flex-col justify-between space-y-4">
+                        <div>
+                            <div class="flex justify-between items-start">
+                                <h3 class="text-base font-bold text-white">${'\$'}{entry.title || 'Untitled Entry'}</h3>
+                                <span class="text-xs text-neutral-500 bg-neutral-900 border border-neutral-800 px-2 py-1 rounded">${'\$'}{entry.dateString}</span>
+                            </div>
+                            <p class="text-sm text-neutral-300 mt-3 whitespace-pre-line leading-relaxed">${'\$'}{entry.text || ''}</p>
+                        </div>
+                        ${'\$'}{attHtml ? `<div class="pt-2 border-t border-neutral-800/50 space-y-2">${'\$'}{attHtml}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderTasks() {
+            const query = document.getElementById('task-search').value.toLowerCase();
+            const statusFilter = document.getElementById('task-filter-status').value;
+            const priorityFilter = document.getElementById('task-filter-priority').value;
+
+            let filtered = TASKS.filter(t => {
+                const matchesQuery = t.title.toLowerCase().includes(query) || (t.description && t.description.toLowerCase().includes(query));
+                const matchesStatus = statusFilter === 'all' || 
+                    (statusFilter === 'active' && !t.isCompleted) || 
+                    (statusFilter === 'completed' && t.isCompleted);
+                const matchesPriority = priorityFilter === 'all' || t.priority === priorityFilter;
+                return matchesQuery && matchesStatus && matchesPriority;
+            });
+
+            const body = document.getElementById('tasks-table-body');
+            if (filtered.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" class="text-center text-neutral-500 py-12">No tasks found.</td></tr>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(task => `
+                <tr class="hover:bg-[#15151b] transition">
+                    <td class="py-4 px-4 text-sm font-medium">
+                        ${'\$'}{task.isCompleted ? '<span class="text-emerald-500 font-bold">✓ Done</span>' : '<span class="text-amber-500 font-medium">◽ Active</span>'}
+                    </td>
+                    <td class="py-4 px-4">
+                        <div class="text-sm font-bold text-white">${'\$'}{task.title}</div>
+                        ${'\$'}{task.description ? `<div class="text-xs text-neutral-400 mt-1 max-w-lg truncate">${'\$'}{task.description}</div>` : ''}
+                    </td>
+                    <td class="py-4 px-4 text-xs font-semibold">
+                        <span class="px-2.5 py-1 rounded-full ${'\$'}{task.priority === 'HIGH' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : task.priority === 'MEDIUM' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">
+                            ${'\$'}{task.priority}
+                        </span>
+                    </td>
+                    <td class="py-4 px-4 text-xs text-neutral-300">${'\$'}{task.listCategory}</td>
+                    <td class="py-4 px-4 text-xs text-neutral-400">${'\$'}{task.dueDateString || '—'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Render Contacts View
+        function renderContacts() {
+            const query = document.getElementById('contact-search').value.toLowerCase();
+            const sort = document.getElementById('contact-sort').value;
+
+            let filtered = CONTACTS.filter(c => {
+                const name = (c.firstName + ' ' + (c.lastName || '')).toLowerCase();
+                return name.includes(query) || (c.email && c.email.toLowerCase().includes(query)) || (c.jobTitle && c.jobTitle.toLowerCase().includes(query));
+            });
+
+            if (sort === 'name') {
+                filtered.sort((a,b) => a.firstName.localeCompare(b.firstName));
+            } else {
+                filtered.sort((a,b) => (a.jobTitle || '').localeCompare(b.jobTitle || ''));
+            }
+
+            const grid = document.getElementById('contacts-grid');
+            if (filtered.length === 0) {
+                grid.innerHTML = '<div class="col-span-full text-center text-neutral-500 py-12">No contacts found.</div>';
+                return;
+            }
+
+            grid.innerHTML = filtered.map(c => {
+                const photoUrl = c.photoUri ? getMediaUrl(c.photoUri) : '';
+                const attached = c.attachedFilesJson ? JSON.parse(c.attachedFilesJson) : [];
+
+                return `
+                    <div class="bg-[#121217] border border-neutral-800 rounded-xl p-5 shadow-md flex flex-col space-y-4 hover:border-neutral-700 transition">
+                        <div class="flex items-center space-x-4">
+                            ${'\$'}{photoUrl ? `
+                                <img src="${'\$'}{photoUrl}" class="w-14 h-14 rounded-full object-cover border-2 border-neutral-800 shadow" onerror="this.src='https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'" />
+                            ` : `
+                                <div class="w-14 h-14 rounded-full bg-neutral-800 flex items-center justify-center text-lg font-bold text-white uppercase border border-neutral-700">
+                                    ${'\$'}{c.firstName[0]}${'\$'}{c.lastName ? c.lastName[0] : ''}
+                                </div>
+                            `}
+                            <div>
+                                <h3 class="text-base font-bold text-white">${'\$'}{c.firstName} ${'\$'}{c.lastName || ''}</h3>
+                                <p class="text-xs text-neutral-400 font-medium">${'\$'}{c.jobTitle || 'No Title'}</p>
+                            </div>
+                        </div>
+                        <div class="space-y-2 text-xs text-neutral-300">
+                            ${'\$'}{c.phone ? `<p class="flex items-center space-x-1.5"><span>📞</span> <span class="font-mono text-neutral-200">${'\$'}{c.phone}</span></p>` : ''}
+                            ${'\$'}{c.email ? `<p class="flex items-center space-x-1.5"><span>✉️</span> <span class="text-neutral-200 hover:underline">${'\$'}{c.email}</span></p>` : ''}
+                        </div>
+                        ${'\$'}{attached.length > 0 ? `
+                            <div class="pt-3 border-t border-neutral-800">
+                                <p class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider mb-2">Attached Files</p>
+                                <div class="space-y-1.5">
+                                    ${'\$'}{attached.map(f => getAttachmentHtml(f)).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderFinances() {
+            const query = document.getElementById('finance-search').value.toLowerCase();
+            const typeFilter = document.getElementById('finance-filter-type').value;
+
+            let filtered = LEDGER.filter(l => {
+                const matchesQuery = (l.note && l.note.toLowerCase().includes(query)) || (l.categoryTag && l.categoryTag.toLowerCase().includes(query));
+                const matchesType = typeFilter === 'all' || l.type === typeFilter;
+                return matchesQuery && matchesType;
+            });
+
+            let totalIncome = 0;
+            let totalExpense = 0;
+            LEDGER.forEach(l => {
+                if (l.type === 'INCOME') totalIncome += l.amount;
+                else if (l.type === 'EXPENSE') totalExpense += l.amount;
+            });
+
+            document.getElementById('finance-income').innerText = '${'\$'}' + totalIncome.toFixed(2);
+            document.getElementById('finance-expense').innerText = '${'\$'}' + totalExpense.toFixed(2);
+            document.getElementById('finance-balance').innerText = '${'\$'}' + (totalIncome - totalExpense).toFixed(2);
+
+            const body = document.getElementById('finance-table-body');
+            if (filtered.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" class="text-center text-neutral-500 py-12">No financial transactions found.</td></tr>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(item => `
+                <tr class="hover:bg-[#15151b] transition">
+                    <td class="py-4 px-4 text-xs font-mono text-neutral-400">${'\$'}{new Date(item.timestamp).toLocaleDateString()}</td>
+                    <td class="py-4 px-4 text-xs font-semibold text-neutral-300">
+                        <span class="bg-neutral-800 px-2.5 py-1 rounded-full border border-neutral-700">${'\$'}{item.categoryTag}</span>
+                    </td>
+                    <td class="py-4 px-4 text-sm text-neutral-200">${'\$'}{item.note || '—'}</td>
+                    <td class="py-4 px-4 text-xs font-bold">
+                        ${'\$'}{item.type === 'INCOME' ? '<span class="text-green-400">INCOME</span>' : '<span class="text-red-400">EXPENSE</span>'}
+                    </td>
+                    <td class="py-4 px-4 text-sm font-bold font-mono text-right ${'\$'}{item.type === 'INCOME' ? 'text-green-400' : 'text-red-400'}">
+                        ${'\$'}{item.type === 'INCOME' ? '+' : '-'}${'\$'}${'\$'}{item.amount.toFixed(2)}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function renderHabits() {
+            const grid = document.getElementById('habits-grid');
+            if (HABITS.length === 0) {
+                grid.innerHTML = '<div class="col-span-full text-center text-neutral-500 py-12">No habits tracked yet.</div>';
+                return;
+            }
+
+            grid.innerHTML = HABITS.map(h => {
+                const dateStr = h.lastCompletedTimestamp > 0 ? new Date(h.lastCompletedTimestamp).toLocaleDateString() : 'Never';
+                return `
+                    <div class="bg-[#121217] border border-neutral-800 rounded-xl p-5 shadow-md flex items-center justify-between hover:border-neutral-700 transition">
+                        <div>
+                            <h3 class="text-base font-bold text-white">${'\$'}{h.name}</h3>
+                            <p class="text-xs text-neutral-400 mt-2">Last Completed: <span class="font-medium text-neutral-300">${'\$'}{dateStr}</span></p>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-3xl">🔥</span>
+                            <div class="text-sm font-bold text-white mt-1">${'\$'}{h.streakCount} Streak</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        renderDashboard();
+        renderJournals();
+        renderTasks();
+        renderContacts();
+        renderFinances();
+        renderHabits();
+    </script>
+</body>
+</html>
+        """.trimIndent()
     }
 }

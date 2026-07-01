@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -97,16 +98,16 @@ fun TaskInterlinkSearchVBar(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(54.dp)
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF161618)),
-        border = BorderStroke(1.dp, if (selectedTask != null) WaterBlue.copy(alpha = 0.5f) else Color(0xFF2C2C2E))
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111113)),
+        border = BorderStroke(1.dp, if (selectedTask != null) WaterBlue.copy(alpha = 0.6f) else Color(0xFF232326))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp),
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -114,34 +115,56 @@ fun TaskInterlinkSearchVBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                Icon(
-                    imageVector = if (selectedTask != null) Icons.Default.Link else Icons.Default.Search,
-                    contentDescription = "Link Task",
-                    tint = if (selectedTask != null) WaterBlue else Color.Gray,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = selectedTask?.title ?: "Link this focus session to a task...",
-                    color = if (selectedTask != null) Color.White else Color.Gray,
-                    fontSize = 13.sp,
-                    fontWeight = if (selectedTask != null) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(
+                            color = if (selectedTask != null) WaterBlue.copy(alpha = 0.12f) else Color(0xFF1E1E22),
+                            shape = RoundedCornerShape(8.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (selectedTask != null) Icons.Default.Link else Icons.Default.Search,
+                        contentDescription = "Link Task",
+                        tint = if (selectedTask != null) WaterBlue else Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = if (selectedTask != null) "LINKED TASK" else "TASK LINK",
+                        color = Color.Gray,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        text = selectedTask?.title ?: "Select...",
+                        color = if (selectedTask != null) Color.White else Color.Gray,
+                        fontSize = 12.sp,
+                        fontWeight = if (selectedTask != null) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
             }
             if (selectedTask != null) {
                 IconButton(
                     onClick = {
                         onClear()
                     },
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(24.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Clear selected task",
-                        tint = Color.LightGray,
-                        modifier = Modifier.size(16.dp)
+                        tint = Color.LightGray.copy(alpha = 0.6f),
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -160,16 +183,16 @@ fun TagInterlinkSearchVBar(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(54.dp)
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF161618)),
-        border = BorderStroke(1.dp, if (selectedTag.isNotEmpty()) WaterBlue.copy(alpha = 0.5f) else Color(0xFF2C2C2E))
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111113)),
+        border = BorderStroke(1.dp, if (selectedTag.isNotEmpty()) WaterBlue.copy(alpha = 0.6f) else Color(0xFF232326))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp),
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -177,34 +200,56 @@ fun TagInterlinkSearchVBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Tag,
-                    contentDescription = "Select Tag",
-                    tint = if (selectedTag.isNotEmpty()) WaterBlue else Color.Gray,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = if (selectedTag.isNotEmpty()) "Tag: $selectedTag" else "Select focus tag category...",
-                    color = if (selectedTag.isNotEmpty()) Color.White else Color.Gray,
-                    fontSize = 13.sp,
-                    fontWeight = if (selectedTag.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(
+                            color = if (selectedTag.isNotEmpty()) WaterBlue.copy(alpha = 0.12f) else Color(0xFF1E1E22),
+                            shape = RoundedCornerShape(8.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tag,
+                        contentDescription = "Select Tag",
+                        tint = if (selectedTag.isNotEmpty()) WaterBlue else Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "FOCUS CATEGORY",
+                        color = Color.Gray,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        text = if (selectedTag.isNotEmpty()) selectedTag else "Select...",
+                        color = if (selectedTag.isNotEmpty()) Color.White else Color.Gray,
+                        fontSize = 12.sp,
+                        fontWeight = if (selectedTag.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
             }
             if (selectedTag.isNotEmpty()) {
                 IconButton(
                     onClick = {
                         onClear()
                     },
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(24.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Clear selected tag",
-                        tint = Color.LightGray,
-                        modifier = Modifier.size(16.dp)
+                        tint = Color.LightGray.copy(alpha = 0.6f),
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -227,18 +272,23 @@ fun LiveControlTimerBar(
     val selectedTag by viewModel.attachedTag.collectAsState()
 
     if (isTimerActive) {
-        TagInterlinkSearchVBar(
-            selectedTag = selectedTag,
-            onClear = { viewModel.attachTagToTimer("") },
-            onClick = { viewModel.setShowTagSelectionDialog(true) }
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TaskInterlinkSearchVBar(
-            selectedTask = selectedTask,
-            onClear = { viewModel.attachTaskToTimer(null) },
-            onClick = { viewModel.setShowTaskSelectionDialog(true) }
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            TagInterlinkSearchVBar(
+                selectedTag = selectedTag,
+                onClear = { viewModel.attachTagToTimer("") },
+                onClick = { viewModel.setShowTagSelectionDialog(true) },
+                modifier = Modifier.weight(1f)
+            )
+            TaskInterlinkSearchVBar(
+                selectedTask = selectedTask,
+                onClear = { viewModel.attachTaskToTimer(null) },
+                onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                modifier = Modifier.weight(1f)
+            )
+        }
         Spacer(modifier = Modifier.height(12.dp))
 
         Row(
@@ -286,18 +336,23 @@ fun LiveControlTimerBar(
             }
             Spacer(modifier = Modifier.height(12.dp))
 
-            TagInterlinkSearchVBar(
-                selectedTag = selectedTag,
-                onClear = { viewModel.attachTagToTimer("") },
-                onClick = { viewModel.setShowTagSelectionDialog(true) }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            TaskInterlinkSearchVBar(
-                selectedTask = selectedTask,
-                onClear = { viewModel.attachTaskToTimer(null) },
-                onClick = { viewModel.setShowTaskSelectionDialog(true) }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TagInterlinkSearchVBar(
+                    selectedTag = selectedTag,
+                    onClear = { viewModel.attachTagToTimer("") },
+                    onClick = { viewModel.setShowTagSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+                TaskInterlinkSearchVBar(
+                    selectedTask = selectedTask,
+                    onClear = { viewModel.attachTaskToTimer(null) },
+                    onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             Row(
@@ -323,18 +378,23 @@ fun LiveControlTimerBar(
                 }
             }
         } else {
-            TagInterlinkSearchVBar(
-                selectedTag = selectedTag,
-                onClear = { viewModel.attachTagToTimer("") },
-                onClick = { viewModel.setShowTagSelectionDialog(true) }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            TaskInterlinkSearchVBar(
-                selectedTask = selectedTask,
-                onClear = { viewModel.attachTaskToTimer(null) },
-                onClick = { viewModel.setShowTaskSelectionDialog(true) }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TagInterlinkSearchVBar(
+                    selectedTag = selectedTag,
+                    onClear = { viewModel.attachTagToTimer("") },
+                    onClick = { viewModel.setShowTagSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+                TaskInterlinkSearchVBar(
+                    selectedTask = selectedTask,
+                    onClear = { viewModel.attachTaskToTimer(null) },
+                    onClick = { viewModel.setShowTaskSelectionDialog(true) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             Row(

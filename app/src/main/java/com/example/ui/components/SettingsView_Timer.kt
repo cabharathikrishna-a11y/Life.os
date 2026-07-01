@@ -697,7 +697,7 @@ fun SettingsTimerConfigurationPage(
 
             val strictPrefs = remember { context.getSharedPreferences("strict_mode_prefs", android.content.Context.MODE_PRIVATE) }
             var strictModeEnabled by remember {
-                mutableStateOf(strictPrefs.getBoolean("strict_mode_enabled", false))
+                mutableStateOf(strictPrefs.getBoolean("strict_mode_enabled", true))
             }
             var blockedApps by remember {
                 mutableStateOf(strictPrefs.getStringSet("blocked_packages", emptySet()) ?: emptySet())

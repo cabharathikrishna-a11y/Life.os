@@ -54,6 +54,7 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
         value
     }
     var activePage by remember { mutableStateOf(if (directToBlocks) 14 else 0) }
+    var showUninstallConfirm by remember { mutableStateOf(false) }
 
     val vmActivePage by viewModel.settingsActivePage.collectAsState()
     LaunchedEffect(vmActivePage) {
@@ -297,6 +298,13 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                             icon = Icons.Default.ExitToApp,
                             iconBgColor = Color(0xFFD32F2F)
                         ) { viewModel.logout() }
+                        HorizontalDivider(color = Color(0xFF1E1E22), thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp, end = 16.dp))
+                        SettingsRowItem(
+                            title = "UNINSTALL & DE-REGISTER",
+                            subtitle = "Securely wipe local data, notify peers on Firebase, and uninstall app",
+                            icon = Icons.Default.Delete,
+                            iconBgColor = Color(0xFFD32F2F)
+                        ) { showUninstallConfirm = true }
                     }
                 }
                 
@@ -450,6 +458,46 @@ fun SettingsView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
             )
         }
     }
+
+    if (showUninstallConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUninstallConfirm = false },
+            title = { Text("Secure De-register & Uninstall", fontWeight = FontWeight.Bold, color = Color.White) },
+            text = {
+                Text(
+                    "This action will:\n" +
+                    "1. Mark your status as 'uninstalled' on the remote Firebase database so your name automatically and immediately disappears from your friends' focus list and details.\n" +
+                    "2. Securely wipe all local databases, task lists, tracking history, and preferences.\n" +
+                    "3. Request the Android system uninstallation dialog to delete the app.\n\n" +
+                    "Do you want to proceed?",
+                    color = Color.LightGray,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showUninstallConfirm = false
+                        viewModel.deregisterAndUninstall(context) {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_DELETE).apply {
+                                data = android.net.Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) {
+                    Text("De-register & Delete App", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUninstallConfirm = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF141416)
+        )
+    }
 }
 
 @Composable
@@ -592,6 +640,15 @@ fun SettingsSubpageWorkspace(
 fun CalendarSettingsSection(viewModel: AppViewModel) {
     val context = LocalContext.current
     val syncStatus by viewModel.calendarSyncStatus.collectAsState()
+    val tasksSyncStatus by viewModel.googleTasksSyncStatus.collectAsState()
+
+    val tasksAuthLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            viewModel.syncGoogleTasks(context) { }
+        }
+    }
 
     var hasPermission by remember {
         mutableStateOf(
@@ -851,6 +908,64 @@ fun CalendarSettingsSection(viewModel: AppViewModel) {
                         ) {
                             Text("Sync Now", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0D11)),
+            border = BorderStroke(1.dp, Color(0xFF222225)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "GTasks",
+                        tint = WaterBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        "Google Tasks Sync",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Text(
+                    "Enable bidirectional background synchronization with Google Tasks. Tasks without date or time are automatically kept in sync with Google Tasks.",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Sync Status", color = Color.Gray, fontSize = 11.sp)
+                        Text(tasksSyncStatus, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            viewModel.syncGoogleTasks(context) { intent ->
+                                tasksAuthLauncher.launch(intent)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = WaterBlue),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("Sync Now", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }

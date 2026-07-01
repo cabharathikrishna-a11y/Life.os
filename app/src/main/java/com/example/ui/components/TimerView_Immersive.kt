@@ -84,6 +84,11 @@ fun TimerImmersiveContent(
         }
     }
 
+    LaunchedEffect(isFocusPhase, isTimerActive, isStopwatchActive) {
+        areControlsVisible = true
+        interactionCounter++
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -320,57 +325,93 @@ fun TimerImmersiveContent(
                         }
                     } else {
                         // BREAK PHASE
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(130.dp)
-                                    .height(48.dp)
-                                    .bouncyClick {
-                                        viewModel.pauseTimer()
-                                        if (wasStartedFromStopwatch) {
-                                            viewModel.switchToFocusPhaseFromStopwatch()
-                                            viewModel.startStopwatch()
-                                        } else {
-                                            viewModel.resetWorkPhaseTimer(focusTimerDurationMins)
-                                            viewModel.startTimer()
-                                        }
-                                        viewModel.setTimerImmersive(true)
-                                    }
-                                    .glassmorphicCard(
-                                        shape = RoundedCornerShape(11.dp),
-                                        borderWidth = 0.6.dp,
-                                        borderColor = WaterBlue.copy(alpha = 0.6f),
-                                        backgroundColor = WaterBlue.copy(alpha = 0.35f)
-                                    ),
-                                contentAlignment = Alignment.Center
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = if (wasStartedFromStopwatch) "Start Stopwatch" else "Start Pomo",
-                                    color = WaterBlue,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
+                                // Pause/Resume Break Button
+                                val isBreakActive = isTimerActive
+                                Box(
+                                    modifier = Modifier
+                                        .width(130.dp)
+                                        .height(44.dp)
+                                        .bouncyClick {
+                                            if (isBreakActive) {
+                                                viewModel.pauseTimer()
+                                            } else {
+                                                viewModel.startTimer()
+                                            }
+                                        }
+                                        .glassmorphicCard(
+                                            shape = RoundedCornerShape(10.dp),
+                                            borderWidth = 0.5.dp,
+                                            borderColor = if (isBreakActive) Color(0x33FFFFFF) else WaterBlue.copy(alpha = 0.5f),
+                                            backgroundColor = if (isBreakActive) Color(0x40222222) else WaterBlue.copy(alpha = 0.3f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (isBreakActive) "Pause Break" else "Resume Break",
+                                        color = if (isBreakActive) Color.White else WaterBlue,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                // Start Pomo Button
+                                Box(
+                                    modifier = Modifier
+                                        .width(130.dp)
+                                        .height(44.dp)
+                                        .bouncyClick {
+                                            viewModel.pauseTimer()
+                                            if (wasStartedFromStopwatch) {
+                                                viewModel.switchToFocusPhaseFromStopwatch()
+                                                viewModel.startStopwatch()
+                                            } else {
+                                                viewModel.resetWorkPhaseTimer(focusTimerDurationMins)
+                                                viewModel.startTimer()
+                                            }
+                                            viewModel.setTimerImmersive(true)
+                                        }
+                                        .glassmorphicCard(
+                                            shape = RoundedCornerShape(10.dp),
+                                            borderWidth = 0.5.dp,
+                                            borderColor = WaterBlue.copy(alpha = 0.6f),
+                                            backgroundColor = WaterBlue.copy(alpha = 0.35f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (wasStartedFromStopwatch) "Start Stopw." else "Start Pomo",
+                                        color = WaterBlue,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
 
+                            // End Break Button
                             Box(
                                 modifier = Modifier
-                                    .width(130.dp)
-                                    .height(48.dp)
+                                    .width(272.dp)
+                                    .height(44.dp)
                                     .bouncyClick {
                                         viewModel.skipOrEndBreak()
                                     }
                                     .glassmorphicCard(
-                                        shape = RoundedCornerShape(11.dp),
-                                        borderWidth = 0.6.dp,
+                                        shape = RoundedCornerShape(10.dp),
+                                        borderWidth = 0.5.dp,
                                         borderColor = Color(0x33C62828),
                                         backgroundColor = Color(0x22C62828)
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("End Break", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("End Break", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }
@@ -496,47 +537,83 @@ fun TimerImmersiveContent(
                         }
                     } else {
                         // BREAK PHASE (from Stopwatch context)
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(130.dp)
-                                    .height(48.dp)
-                                    .bouncyClick {
-                                        viewModel.pauseTimer()
-                                        viewModel.switchToFocusPhase()
-                                        viewModel.startStopwatch()
-                                    }
-                                    .glassmorphicCard(
-                                        shape = RoundedCornerShape(11.dp),
-                                        borderWidth = 0.6.dp,
-                                        borderColor = WaterBlue.copy(alpha = 0.6f),
-                                        backgroundColor = WaterBlue.copy(alpha = 0.35f)
-                                    ),
-                                contentAlignment = Alignment.Center
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Start Stopw.", color = WaterBlue, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                // Pause/Resume Break Button
+                                val isBreakActive = isTimerActive
+                                Box(
+                                    modifier = Modifier
+                                        .width(130.dp)
+                                        .height(44.dp)
+                                        .bouncyClick {
+                                            if (isBreakActive) {
+                                                viewModel.pauseTimer()
+                                            } else {
+                                                viewModel.startTimer()
+                                            }
+                                        }
+                                        .glassmorphicCard(
+                                            shape = RoundedCornerShape(10.dp),
+                                            borderWidth = 0.5.dp,
+                                            borderColor = if (isBreakActive) Color(0x33FFFFFF) else WaterBlue.copy(alpha = 0.5f),
+                                            backgroundColor = if (isBreakActive) Color(0x40222222) else WaterBlue.copy(alpha = 0.3f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (isBreakActive) "Pause Break" else "Resume Break",
+                                        color = if (isBreakActive) Color.White else WaterBlue,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                // Start Stopwatch Button
+                                Box(
+                                    modifier = Modifier
+                                        .width(130.dp)
+                                        .height(44.dp)
+                                        .bouncyClick {
+                                            viewModel.pauseTimer()
+                                            viewModel.switchToFocusPhase()
+                                            viewModel.startStopwatch()
+                                        }
+                                        .glassmorphicCard(
+                                            shape = RoundedCornerShape(10.dp),
+                                            borderWidth = 0.5.dp,
+                                            borderColor = WaterBlue.copy(alpha = 0.6f),
+                                            backgroundColor = WaterBlue.copy(alpha = 0.35f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("Start Stopw.", color = WaterBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
                             }
 
+                            // End Break Button
                             Box(
                                 modifier = Modifier
-                                    .width(130.dp)
-                                    .height(48.dp)
+                                    .width(272.dp)
+                                    .height(44.dp)
                                     .bouncyClick {
                                         viewModel.pauseTimer()
                                         viewModel.prepareAndShowEndSessionDialog("stopwatch", stopwatchSeconds)
                                     }
                                     .glassmorphicCard(
-                                        shape = RoundedCornerShape(11.dp),
-                                        borderWidth = 0.6.dp,
+                                        shape = RoundedCornerShape(10.dp),
+                                        borderWidth = 0.5.dp,
                                         borderColor = Color(0x33C62828),
                                         backgroundColor = Color(0x22C62828)
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("End Break", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("End Break", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }

@@ -31,7 +31,8 @@ data class UserRemote(
     val focusStatus: String? = null,
     val currentTag: String? = null,
     val isGoogleUser: Boolean? = null,
-    val email: String? = null
+    val email: String? = null,
+    val status: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -114,17 +115,21 @@ object FirebaseClient {
     private var cachedApi: FirebaseApi? = null
     private var cachedUrl: String? = null
 
+    @Volatile
+    var appContext: android.content.Context? = null
+
     val api: FirebaseApi
         get() {
             val url = activeUrl
             synchronized(this) {
                 if (cachedApi == null || cachedUrl != url) {
                     cachedUrl = url
-                    cachedApi = Retrofit.Builder()
+                    val retrofitApi = Retrofit.Builder()
                         .baseUrl(url)
                         .addConverterFactory(MoshiConverterFactory.create(moshi))
                         .build()
                         .create(FirebaseApi::class.java)
+                    cachedApi = InterceptingFirebaseApi(retrofitApi) { appContext }
                 }
                 return cachedApi!!
             }
@@ -136,4 +141,96 @@ object FirebaseClient {
             val sanitized = if (value.endsWith("/")) value else "$value/"
             field = sanitized
         }
+}
+
+class InterceptingFirebaseApi(
+    private val delegate: FirebaseApi,
+    private val contextProvider: () -> android.content.Context?
+) : FirebaseApi {
+
+    private fun isTester(): Boolean {
+        val ctx = contextProvider() ?: return false
+        val prefs = ctx.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+        return prefs.getBoolean("is_tester_mode", false)
+    }
+
+    override suspend fun getUsers(): retrofit2.Response<Map<String, UserRemote>?> {
+        // GET requests are allowed so the tester can see other users' details
+        return delegate.getUsers()
+    }
+
+    override suspend fun putUser(username: String, user: UserRemote): UserRemote {
+        if (isTester() || username == "tester_mode_user") {
+            // Intercept and bypass
+            android.util.Log.d("InterceptingFirebase", "Bypassing putUser for username: $username in Tester Mode")
+            return user
+        }
+        return delegate.putUser(username, user)
+    }
+
+    override suspend fun deleteUser(username: String): retrofit2.Response<Unit> {
+        if (isTester() || username == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing deleteUser for username: $username in Tester Mode")
+            return retrofit2.Response.success(Unit)
+        }
+        return delegate.deleteUser(username)
+    }
+
+    override suspend fun getBellSignal(username: String): retrofit2.Response<BellSignal?> {
+        if (isTester() || username == "tester_mode_user") {
+            return retrofit2.Response.success(null)
+        }
+        return delegate.getBellSignal(username)
+    }
+
+    override suspend fun putBellSignal(username: String, signal: BellSignal?): BellSignal? {
+        if (isTester() || username == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing putBellSignal for username: $username in Tester Mode")
+            return signal
+        }
+        return delegate.putBellSignal(username, signal)
+    }
+
+    override suspend fun getPeerRequests(username: String): retrofit2.Response<Map<String, Boolean>?> {
+        if (isTester() || username == "tester_mode_user") {
+            return retrofit2.Response.success(null)
+        }
+        return delegate.getPeerRequests(username)
+    }
+
+    override suspend fun putPeerRequest(username: String, requester: String, request: Boolean): Boolean {
+        if (isTester() || username == "tester_mode_user" || requester == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing putPeerRequest in Tester Mode")
+            return true
+        }
+        return delegate.putPeerRequest(username, requester, request)
+    }
+
+    override suspend fun deletePeerRequest(username: String, requester: String): retrofit2.Response<Unit> {
+        if (isTester() || username == "tester_mode_user" || requester == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing deletePeerRequest in Tester Mode")
+            return retrofit2.Response.success(Unit)
+        }
+        return delegate.deletePeerRequest(username, requester)
+    }
+
+    override suspend fun getTransferredData(requester: String, provider: String): retrofit2.Response<List<FocusRecord>?> {
+        return delegate.getTransferredData(requester, provider)
+    }
+
+    override suspend fun putTransferredData(requester: String, provider: String, records: List<FocusRecord>?): List<FocusRecord>? {
+        if (isTester() || requester == "tester_mode_user" || provider == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing putTransferredData in Tester Mode")
+            return records
+        }
+        return delegate.putTransferredData(requester, provider, records)
+    }
+
+    override suspend fun deleteTransferredData(requester: String, provider: String): retrofit2.Response<Unit> {
+        if (isTester() || requester == "tester_mode_user" || provider == "tester_mode_user") {
+            android.util.Log.d("InterceptingFirebase", "Bypassing deleteTransferredData in Tester Mode")
+            return retrofit2.Response.success(Unit)
+        }
+        return delegate.deleteTransferredData(requester, provider)
+    }
 }

@@ -89,10 +89,15 @@ object GoogleContactsSyncManager {
                     // Update existing local contact
                     val updated = matchedLocal.copy(
                         firstName = if (gContact.firstName.isNotEmpty()) gContact.firstName else matchedLocal.firstName,
+                        middleName = if (gContact.middleName.isNotEmpty()) gContact.middleName else matchedLocal.middleName,
                         lastName = if (gContact.lastName.isNotEmpty()) gContact.lastName else matchedLocal.lastName,
                         phone = if (gContact.phone.isNotEmpty()) gContact.phone else matchedLocal.phone,
                         dobString = if (gContact.dobString.isNotEmpty()) gContact.dobString else matchedLocal.dobString,
                         photoUri = if (!gContact.photoUrl.isNullOrEmpty()) gContact.photoUrl else matchedLocal.photoUri,
+                        email = if (gContact.email.isNotEmpty()) gContact.email else matchedLocal.email,
+                        address = if (gContact.address.isNotEmpty()) gContact.address else matchedLocal.address,
+                        jobTitle = if (gContact.jobTitle.isNotEmpty()) gContact.jobTitle else matchedLocal.jobTitle,
+                        anniversaryString = if (gContact.anniversaryString.isNotEmpty()) gContact.anniversaryString else matchedLocal.anniversaryString,
                         googleContactId = gContact.resourceName
                     )
                     contactDao.updateContact(updated)
@@ -100,10 +105,15 @@ object GoogleContactsSyncManager {
                     // Create new local contact
                     val newContact = Contact(
                         firstName = gContact.firstName,
+                        middleName = gContact.middleName,
                         lastName = gContact.lastName,
                         phone = gContact.phone,
                         dobString = gContact.dobString,
                         photoUri = gContact.photoUrl,
+                        email = gContact.email,
+                        address = gContact.address,
+                        jobTitle = gContact.jobTitle,
+                        anniversaryString = gContact.anniversaryString,
                         googleContactId = gContact.resourceName
                     )
                     contactDao.insertContact(newContact)
@@ -122,9 +132,14 @@ object GoogleContactsSyncManager {
                         // Let's update Google if local info is different
                         val gContact = googleIdToConnection[local.googleContactId]!!
                         if (local.firstName != gContact.firstName ||
+                            local.middleName != gContact.middleName ||
                             local.lastName != gContact.lastName ||
                             local.phone != gContact.phone ||
-                            local.dobString != gContact.dobString
+                            local.dobString != gContact.dobString ||
+                            local.email != gContact.email ||
+                            local.address != gContact.address ||
+                            local.jobTitle != gContact.jobTitle ||
+                            local.anniversaryString != gContact.anniversaryString
                         ) {
                             updateGoogleContact(token, local)
                         }
@@ -163,13 +178,18 @@ object GoogleContactsSyncManager {
         val etag: String,
         val firstName: String,
         val lastName: String,
+        val middleName: String,
         val phone: String,
         val dobString: String,
-        val photoUrl: String?
+        val photoUrl: String?,
+        val email: String,
+        val address: String,
+        val jobTitle: String,
+        val anniversaryString: String
     )
 
     private suspend fun fetchGoogleConnections(token: String): List<GoogleContactDetails> {
-        val url = "https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,birthdays,photos&pageSize=1000"
+        val url = "https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,birthdays,photos,emailAddresses,addresses,organizations,events&pageSize=1000"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")
@@ -195,11 +215,13 @@ object GoogleContactsSyncManager {
                 // 1. Name parsing
                 var firstName = ""
                 var lastName = ""
+                var middleName = ""
                 val names = conn.optJSONArray("names")
                 if (names != null && names.length() > 0) {
                     val nameObj = names.getJSONObject(0)
                     firstName = nameObj.optString("givenName", "")
                     lastName = nameObj.optString("familyName", "")
+                    middleName = nameObj.optString("middleName", "")
                 }
 
                 // 2. Phone parsing
@@ -237,6 +259,51 @@ object GoogleContactsSyncManager {
                     }
                 }
 
+                // 5. Email parsing
+                var email = ""
+                val emailAddresses = conn.optJSONArray("emailAddresses")
+                if (emailAddresses != null && emailAddresses.length() > 0) {
+                    email = emailAddresses.getJSONObject(0).optString("value", "")
+                }
+
+                // 6. Address parsing
+                var address = ""
+                val addresses = conn.optJSONArray("addresses")
+                if (addresses != null && addresses.length() > 0) {
+                    address = addresses.getJSONObject(0).optString("formattedValue", "")
+                }
+
+                // 7. Job Title parsing
+                var jobTitle = ""
+                val organizations = conn.optJSONArray("organizations")
+                if (organizations != null && organizations.length() > 0) {
+                    jobTitle = organizations.getJSONObject(0).optString("title", "")
+                }
+
+                // 8. Anniversary parsing
+                var anniversaryString = ""
+                val events = conn.optJSONArray("events")
+                if (events != null) {
+                    for (j in 0 until events.length()) {
+                        val eventObj = events.getJSONObject(j)
+                        val type = eventObj.optString("type", "")
+                        if (type == "anniversary") {
+                            val dateObj = eventObj.optJSONObject("date")
+                            if (dateObj != null) {
+                                val y = dateObj.optInt("year", 0)
+                                val m = dateObj.optInt("month", 0)
+                                val d = dateObj.optInt("day", 0)
+                                if (y > 0 && m > 0 && d > 0) {
+                                    anniversaryString = String.format(Locale.US, "%04d-%02d-%02d", y, m, d)
+                                } else if (m > 0 && d > 0) {
+                                    anniversaryString = String.format(Locale.US, "%02d-%02d", m, d)
+                                }
+                            }
+                            break
+                        }
+                    }
+                }
+
                 if (resourceName.isNotEmpty()) {
                     list.add(
                         GoogleContactDetails(
@@ -244,9 +311,14 @@ object GoogleContactsSyncManager {
                             etag = etag,
                             firstName = firstName,
                             lastName = lastName,
+                            middleName = middleName,
                             phone = phone,
                             dobString = dobString,
-                            photoUrl = photoUrl
+                            photoUrl = photoUrl,
+                            email = email,
+                            address = address,
+                            jobTitle = jobTitle,
+                            anniversaryString = anniversaryString
                         )
                     )
                 }
@@ -281,7 +353,7 @@ object GoogleContactsSyncManager {
         val resourceName = contact.googleContactId ?: return false
         val etag = getEtag(token, resourceName) ?: return false
 
-        val url = "https://people.googleapis.com/v1/$resourceName?updatePersonFields=names,phoneNumbers,birthdays"
+        val url = "https://people.googleapis.com/v1/$resourceName?updatePersonFields=names,phoneNumbers,birthdays,emailAddresses,addresses,organizations,events"
         val payload = buildContactPayload(contact).apply {
             put("etag", etag)
         }
@@ -355,6 +427,9 @@ object GoogleContactsSyncManager {
             put(JSONObject().apply {
                 put("givenName", contact.firstName)
                 put("familyName", contact.lastName)
+                if (contact.middleName.isNotEmpty()) {
+                    put("middleName", contact.middleName)
+                }
             })
         }
         payload.put("names", namesArray)
@@ -367,6 +442,36 @@ object GoogleContactsSyncManager {
                 })
             }
             payload.put("phoneNumbers", phoneArray)
+        }
+
+        if (contact.email.isNotEmpty()) {
+            val emailArray = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("value", contact.email)
+                    put("type", "home")
+                })
+            }
+            payload.put("emailAddresses", emailArray)
+        }
+
+        if (contact.address.isNotEmpty()) {
+            val addressesArray = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("formattedValue", contact.address)
+                    put("type", "home")
+                })
+            }
+            payload.put("addresses", addressesArray)
+        }
+
+        if (contact.jobTitle.isNotEmpty()) {
+            val orgsArray = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("title", contact.jobTitle)
+                    put("type", "work")
+                })
+            }
+            payload.put("organizations", orgsArray)
         }
 
         if (contact.dobString.isNotEmpty()) {
@@ -388,6 +493,29 @@ object GoogleContactsSyncManager {
                     })
                 }
                 payload.put("birthdays", birthdaysArray)
+            }
+        }
+
+        if (contact.anniversaryString.isNotEmpty()) {
+            val annStr = contact.anniversaryString
+            val parts = annStr.split("-")
+            val dateObj = JSONObject()
+            if (parts.size == 3) {
+                dateObj.put("year", parts[0].toIntOrNull() ?: 0)
+                dateObj.put("month", parts[1].toIntOrNull() ?: 0)
+                dateObj.put("day", parts[2].toIntOrNull() ?: 0)
+            } else if (parts.size == 2) {
+                dateObj.put("month", parts[0].toIntOrNull() ?: 0)
+                dateObj.put("day", parts[1].toIntOrNull() ?: 0)
+            }
+            if (dateObj.length() > 0) {
+                val eventsArray = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "anniversary")
+                        put("date", dateObj)
+                    })
+                }
+                payload.put("events", eventsArray)
             }
         }
 

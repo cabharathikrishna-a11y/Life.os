@@ -165,6 +165,114 @@ object AppUpdateManager {
         }
     }
 
+    fun getRunningFirebaseVersion(context: Context): Int {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getInt("pref_running_firebase_version", -1)
+        if (saved == -1) {
+            val currentCode = getCurrentVersionCode(context)
+            prefs.edit().putInt("pref_running_firebase_version", currentCode).apply()
+            return currentCode
+        }
+        return saved
+    }
+
+    fun setRunningFirebaseVersion(context: Context, version: Int) {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putInt("pref_running_firebase_version", version).apply()
+    }
+
+    /**
+     * Checks if the app was recently updated (current version code is higher than stored version code).
+     * If so, clears pending update data, cleans up old downloaded APKs, and returns the new version code.
+     */
+    fun checkAndNotifyUpgradeComplete(context: Context): Int? {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val lastKnown = prefs.getInt("pref_last_known_version_code", -1)
+        val current = getCurrentVersionCode(context)
+        
+        val installTarget = prefs.getInt("pref_install_target_version", -1)
+        val runningFirebase = getRunningFirebaseVersion(context)
+        
+        var upgradeDetected = false
+        var upgradedToVersion = current
+        
+        if (installTarget != -1 && installTarget > runningFirebase) {
+            setRunningFirebaseVersion(context, installTarget)
+            prefs.edit().remove("pref_install_target_version").apply()
+            upgradeDetected = true
+            upgradedToVersion = installTarget
+            Log.i(TAG, "Upgrade detected via Firebase install target! Running Firebase version is now Build $installTarget")
+        }
+        
+        if (lastKnown == -1) {
+            prefs.edit().putInt("pref_last_known_version_code", current).apply()
+            if (upgradeDetected) {
+                clearPendingUpdateVersion(context)
+                sendUpgradeNotification(context, upgradedToVersion)
+                return upgradedToVersion
+            }
+            return null
+        }
+        
+        if (current > lastKnown || upgradeDetected) {
+            if (current > lastKnown) {
+                Log.i(TAG, "Upgrade detected via Package Version Code! Upgraded from Build $lastKnown to Build $current")
+                prefs.edit().putInt("pref_last_known_version_code", current).apply()
+                setRunningFirebaseVersion(context, current)
+                upgradedToVersion = current
+            }
+            
+            clearPendingUpdateVersion(context)
+            
+            val readyPath = getReadyApkPath(context)
+            if (!readyPath.isNullOrBlank()) {
+                try {
+                    val file = File(readyPath)
+                    if (file.exists()) {
+                        file.delete()
+                        Log.i(TAG, "Successfully deleted temporary APK after update installation: $readyPath")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to delete downloaded APK file after update", e)
+                }
+                setReadyApkPath(context, null)
+            }
+            
+            sendUpgradeNotification(context, upgradedToVersion)
+            return upgradedToVersion
+        }
+        
+        return null
+    }
+
+    private fun sendUpgradeNotification(context: Context, version: Int) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channelId = "app_update_channel"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    channelId,
+                    "System Updates",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+                notificationManager.createNotificationChannel(channel)
+            }
+            
+            val notification = NotificationCompat.Builder(context, channelId)
+                .setContentTitle("Update Installed Successfully! 🎉")
+                .setContentText("Life OS has been updated to Build $version (v${getCurrentVersionName(context)}). Enjoy the new features!")
+                .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .setStyle(NotificationCompat.BigTextStyle().bigText("Life OS has been updated to Build $version (v${getCurrentVersionName(context)}). Enjoy the new features! Your data is fully secure."))
+                .build()
+            
+            notificationManager.notify(10011, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send update completion notification", e)
+        }
+    }
+
     /**
      * Retrieves the current app's version code.
      */
@@ -279,7 +387,9 @@ object AppUpdateManager {
         withContext(Dispatchers.IO) {
             val errorLogs = mutableListOf<String>()
             try {
-                val currentCode = getCurrentVersionCode(context)
+                val packageCode = getCurrentVersionCode(context)
+                val runningFirebase = getRunningFirebaseVersion(context)
+                val currentCode = maxOf(packageCode, runningFirebase)
                 
                 // 1. Fetch update config from Firebase
                 var targetVersionCode = -1
@@ -987,7 +1097,10 @@ object AppUpdateManager {
                 }
 
                 // Check version is strictly greater before proceeding to install
-                val currentCode = getCurrentVersionCode(context)
+                val packageCode = getCurrentVersionCode(context)
+                val runningFirebase = getRunningFirebaseVersion(context)
+                val targetFirebaseVersion = getPendingUpdateVersion(context)
+                
                 var downloadedCode = -1
                 val packageInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
                 if (packageInfo != null) {
@@ -999,13 +1112,15 @@ object AppUpdateManager {
                     }
                 }
 
-                if (downloadedCode <= currentCode) {
-                    Log.w(TAG, "Downloaded APK version code ($downloadedCode) is not greater than current version ($currentCode).")
+                val isFirebaseBypass = targetFirebaseVersion > runningFirebase && downloadedCode == packageCode
+
+                if (downloadedCode <= packageCode && !isFirebaseBypass) {
+                    Log.w(TAG, "Downloaded APK version code ($downloadedCode) is not greater than current version ($packageCode).")
                     if (apkFile.exists()) {
                         apkFile.delete()
                     }
                     val detailMsg = if (downloadedCode > 0) {
-                        "Failed to update: The downloaded APK actually has version code $downloadedCode (same as or older than your current running version $currentCode), even though Firebase was set to version 5. This happens when the Firebase version config is bumped to 5, but the old APK file (version $downloadedCode) was not replaced on your Google Drive or GitHub releases with the newly built APK. Please upload the newly compiled APK (with versionCode 5) and try again."
+                        "Failed to update: The downloaded APK actually has version code $downloadedCode (same as or older than your current running version $packageCode), even though Firebase was set to version $targetFirebaseVersion. This happens when the Firebase version config is bumped, but the old APK file was not replaced. Please upload the newly compiled APK and try again."
                     } else {
                         "Failed to update: Downloaded APK version is not greater than your current version. Pre-update data remains fully secured."
                     }
@@ -1075,6 +1190,11 @@ object AppUpdateManager {
                 }
 
                 Log.i(TAG, "Launching package installer for URI: $apkUri")
+                val targetVersion = getPendingUpdateVersion(context)
+                if (targetVersion > 0) {
+                    val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putInt("pref_install_target_version", targetVersion).apply()
+                }
                 context.startActivity(intent)
                 setReadyApkPath(context, null)
                 

@@ -166,6 +166,7 @@ fun SettingsGeneralSystemPage(
                                 Screen.LOGIN -> "Login"
                                 Screen.PROFILE_SETUP -> "Profile Setup"
                                 Screen.PERMISSION_ONBOARDING -> "Permissions Onboarding"
+                                Screen.CALENDAR_OPTIMIZATION_ONBOARDING -> "Calendar Optimization"
                             }
 
                             Row(

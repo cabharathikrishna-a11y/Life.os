@@ -169,6 +169,9 @@ fun TimerConfirmDialogController(
                 }
             }
 
+            // Preserve start time and pause ranges before wiping out current session tracking
+            com.example.util.FocusTimerManager.recordSessionCompleteOrReset(isSaving = true)
+
             if (stopSessionType == "timer") {
                 viewModel.resetTimer(saveSession = false)
             } else {

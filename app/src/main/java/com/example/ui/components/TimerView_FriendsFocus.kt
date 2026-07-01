@@ -50,7 +50,9 @@ fun FriendsFocusPill(
     // Filter active users who are focusing
     val focusingUsers = allUsers.filter {
         it.value.isFocusing == true && 
-        it.key != "admin"
+        it.key != "admin" &&
+        it.value.status != "logged_out" &&
+        it.value.status != "uninstalled"
     }
 
     Box(
@@ -167,6 +169,16 @@ fun FriendsFocusDetailsDialog(
                 return completedTodaySecs + pendingSecs + activeSessionOverlap
             } else {
                 if (peerRemote != null) {
+                    val lastUpdated = peerRemote.lastUpdatedTimestamp ?: 0L
+                    val lastUpdatedDateStr = if (lastUpdated > 0) {
+                        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(lastUpdated))
+                    } else {
+                        ""
+                    }
+                    if (lastUpdatedDateStr.isNotEmpty() && lastUpdatedDateStr != todayStr) {
+                        return 0
+                    }
+
                     val isFocusing = peerRemote.isFocusing == true
                     
                     // 1. Calculate the Temporary Bank (Live Session)
@@ -223,7 +235,9 @@ fun FriendsFocusDetailsDialog(
         keys.add(currentMeUsername)
         allUsers.forEach { (username, user) ->
             if (username != "admin" && 
-                username != currentMeUsername
+                username != currentMeUsername &&
+                user.status != "logged_out" &&
+                user.status != "uninstalled"
             ) {
                 keys.add(username)
             }
@@ -271,10 +285,18 @@ fun FriendsFocusDetailsDialog(
                 }
             }
 
+            val peerLastUpdated = peerRemote?.lastUpdatedTimestamp ?: 0L
+            val peerLastUpdatedDateStr = if (peerLastUpdated > 0) {
+                java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(peerLastUpdated))
+            } else {
+                ""
+            }
+            val isPeerStale = !isMe && peerLastUpdatedDateStr.isNotEmpty() && peerLastUpdatedDateStr != todayStr
+
             val isFocusing = if (isMe) {
                 (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value && !showElapsedTimeDialog
             } else {
-                peerRemote?.isFocusing == true
+                if (isPeerStale) false else (peerRemote?.isFocusing == true)
             }
 
             val focusStatus = if (isMe) {
@@ -296,19 +318,19 @@ fun FriendsFocusDetailsDialog(
                     "idle"
                 }
             } else {
-                peerRemote?.focusStatus ?: (if (peerRemote?.isFocusing == true) "focusing" else "idle")
+                if (isPeerStale) "idle" else (peerRemote?.focusStatus ?: (if (peerRemote?.isFocusing == true) "focusing" else "idle"))
             }
 
             val currentTask = if (isMe) {
                 FocusTimerManager.attachedTask.value?.title
             } else {
-                peerRemote?.currentTaskTitle
+                if (isPeerStale) null else peerRemote?.currentTaskTitle
             }
 
             val currentTag = if (isMe) {
                 FocusTimerManager.attachedTag.value.takeIf { it.isNotEmpty() }
             } else {
-                peerRemote?.currentTag
+                if (isPeerStale) null else peerRemote?.currentTag
             }
 
             PeerFocusInfo(
@@ -521,6 +543,14 @@ fun FriendsFocusDetailsDialog(
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Bold
                                                 )
+                                                if (!peer.isMe) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = "@${peer.username}",
+                                                        color = Color.Gray,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
                                                 if (peer.focusStatus == "focusing") {
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Box(
