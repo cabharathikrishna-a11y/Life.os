@@ -1113,6 +1113,7 @@ object AppUpdateManager {
 
                     var bytesRead = startBytes
                     val buffer = ByteArray(8192)
+                    var lastNotificationTime = 0L
                     
                     body.byteStream().use { inputStream ->
                         FileOutputStream(apkFile, appendMode).use { outputStream ->
@@ -1124,7 +1125,12 @@ object AppUpdateManager {
                                 
                                 val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else -1f
                                 _updateStatus.value = UpdateStatus.Downloading(progress)
-                                showProgressNotification(context, progress)
+                                
+                                val currentTime = System.currentTimeMillis()
+                                if (currentTime - lastNotificationTime >= 500L) {
+                                    showProgressNotification(context, progress)
+                                    lastNotificationTime = currentTime
+                                }
                             }
                         }
                     }

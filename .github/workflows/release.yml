@@ -86,6 +86,7 @@ jobs:
       run: ./gradlew assembleRelease -PcustomVersionCode=${{ env.VERSION_CODE }} -PcustomVersionName="${{ env.VERSION_NAME }}"
 
     - name: Distribute Release APK to Firebase App Distribution
+      continue-on-error: true
       env:
         FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_CREDENTIALS }}
         FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
