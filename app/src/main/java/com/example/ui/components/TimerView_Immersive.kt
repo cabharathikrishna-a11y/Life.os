@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,19 +41,19 @@ fun TimerImmersiveContent(
 ) {
     val context = LocalContext.current
 
-    val isFocusPhase by viewModel.isFocusPhase.collectAsState()
-    val isTimerActive by viewModel.isTimerRunning.collectAsState()
-    val timerSecondsRemaining by viewModel.timerSecondsLeft.collectAsState()
-    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsState()
-    val isStopwatchActive by viewModel.isStopwatchActive.collectAsState()
-    val isTabFocusTimerSelected by viewModel.isTabFocusTimerSelected.collectAsState()
-    val wasStartedFromStopwatch by viewModel.wasStartedFromStopwatch.collectAsState()
-    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsState()
-    val selectedTask by viewModel.attachedTask.collectAsState()
+    val isFocusPhase by viewModel.isFocusPhase.collectAsStateWithLifecycle()
+    val isTimerActive by viewModel.isTimerRunning.collectAsStateWithLifecycle()
+    val timerSecondsRemaining by viewModel.timerSecondsLeft.collectAsStateWithLifecycle()
+    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsStateWithLifecycle()
+    val isStopwatchActive by viewModel.isStopwatchActive.collectAsStateWithLifecycle()
+    val isTabFocusTimerSelected by viewModel.isTabFocusTimerSelected.collectAsStateWithLifecycle()
+    val wasStartedFromStopwatch by viewModel.wasStartedFromStopwatch.collectAsStateWithLifecycle()
+    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsStateWithLifecycle()
+    val selectedTask by viewModel.attachedTask.collectAsStateWithLifecycle()
 
-    val motivationalQuoteEnabled by viewModel.focusMotivationalQuoteEnabled.collectAsState()
-    val quoteIntervalMins by viewModel.focusMotivationalQuoteIntervalMins.collectAsState()
-    val currentQuote by viewModel.currentQuote.collectAsState()
+    val motivationalQuoteEnabled by viewModel.focusMotivationalQuoteEnabled.collectAsStateWithLifecycle()
+    val quoteIntervalMins by viewModel.focusMotivationalQuoteIntervalMins.collectAsStateWithLifecycle()
+    val currentQuote by viewModel.currentQuote.collectAsStateWithLifecycle()
 
     var areControlsVisible by remember { mutableStateOf(true) }
     var isAntiBurnCenteredByTap by remember { mutableStateOf(false) }

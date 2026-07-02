@@ -32,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.ui.AppViewModel
 import com.example.ui.theme.WaterBlue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,39 +63,47 @@ fun TimerView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
     }
 
     // Navigation & Modal States
-    val showHistoryScreen by viewModel.showHistoryScreen.collectAsState()
+    val showHistoryScreen by viewModel.showHistoryScreen.collectAsStateWithLifecycle()
     var showFriendsFocusDetails by remember { mutableStateOf(false) }
     var selectedDateStr by remember { 
         mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())) 
     }
     var showCalendarDialog by remember { mutableStateOf(false) }
-    val showTaskSelectionDialog by viewModel.showTaskSelectionDialog.collectAsState()
+    val showTaskSelectionDialog by viewModel.showTaskSelectionDialog.collectAsStateWithLifecycle()
 
     // Configuration and Dynamic States
-    val focusTimerDurationMins by viewModel.focusTimerDurationMins.collectAsState()
-    val isImmersive by viewModel.isTimerImmersive.collectAsState()
+    val focusTimerDurationMins by viewModel.focusTimerDurationMins.collectAsStateWithLifecycle()
+    val isImmersive by viewModel.isTimerImmersive.collectAsStateWithLifecycle()
     val isTablet = LocalConfiguration.current.screenWidthDp >= 600
 
-    val tasks by viewModel.tasks.collectAsState()
-    val isTimerActive by viewModel.isTimerRunning.collectAsState()
-    val isFocusPhase by viewModel.isFocusPhase.collectAsState()
-    val selectedTask by viewModel.attachedTask.collectAsState()
-    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsState()
-    val focusRecords by viewModel.focusRecords.collectAsState()
-    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsState()
-    val isStopwatchActive by viewModel.isStopwatchActive.collectAsState()
-    val pendingFocusReview by viewModel.pendingFocusReview.collectAsState()
-    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsState()
+    val tasks by viewModel.tasks.collectAsStateWithLifecycle()
+    val isTimerActive by viewModel.isTimerRunning.collectAsStateWithLifecycle()
+    val isFocusPhase by viewModel.isFocusPhase.collectAsStateWithLifecycle()
+    val selectedTask by viewModel.attachedTask.collectAsStateWithLifecycle()
+    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsStateWithLifecycle()
+    val focusRecords by viewModel.focusRecords.collectAsStateWithLifecycle()
+    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsStateWithLifecycle()
+    val isStopwatchActive by viewModel.isStopwatchActive.collectAsStateWithLifecycle()
+    val pendingFocusReview by viewModel.pendingFocusReview.collectAsStateWithLifecycle()
+    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsStateWithLifecycle()
 
     // Milestone & Dialog States
-    val focusRankPopup by viewModel.focusRankPopup.collectAsState()
+    val focusRankPopup by viewModel.focusRankPopup.collectAsStateWithLifecycle()
 
     // Dynamically calculate focus metrics
-    val globalTodaySeconds = remember(focusRecords, isFocusPhase, cumulativeSessionFocusSeconds, stopwatchSeconds, pendingFocusReview, sessionStartTimestamp, isTimerActive, isStopwatchActive) {
+    val completedTodaySecs = remember(focusRecords) {
         val systemTodayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
-        val completedTodaySecs = focusRecords.sumOf { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) }
-        val pendingSecs = pendingFocusReview?.let { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) } ?: 0
-        val activeSecs = if (isFocusPhase) {
+        focusRecords.sumOf { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) }
+    }
+
+    val pendingSecs = remember(pendingFocusReview) {
+        val systemTodayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+        pendingFocusReview?.let { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) } ?: 0
+    }
+
+    val globalTodaySeconds = remember(completedTodaySecs, pendingSecs, isFocusPhase, cumulativeSessionFocusSeconds, stopwatchSeconds, pendingFocusReview, sessionStartTimestamp, isTimerActive, isStopwatchActive) {
+        val systemTodayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+        val activeSecs = if (isFocusPhase && pendingFocusReview == null) {
             val startTs = sessionStartTimestamp
             if ((isTimerActive || isStopwatchActive) && startTs != null) {
                 com.example.util.FocusTimerManager.getActiveSessionOverlapSeconds(startTs, systemTodayStr)
@@ -136,7 +145,7 @@ fun TimerView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
         )
     }
 
-    val showTagSelectionDialog by viewModel.showTagSelectionDialog.collectAsState()
+    val showTagSelectionDialog by viewModel.showTagSelectionDialog.collectAsStateWithLifecycle()
     if (showTagSelectionDialog) {
         TagSelectionDialog(
             viewModel = viewModel,
@@ -239,7 +248,7 @@ fun TimerView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val isBellSilent by viewModel.isBellSilentModeEnabled.collectAsState()
+                        val isBellSilent by viewModel.isBellSilentModeEnabled.collectAsStateWithLifecycle()
                         IconButton(
                             onClick = { viewModel.setBellSilentModeEnabled(!isBellSilent) },
                             modifier = Modifier

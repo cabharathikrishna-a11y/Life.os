@@ -13,6 +13,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,7 +96,6 @@ fun FriendsFocusLeaderboardTable(
     val currentUnixTime = currentUnixTimeState.value
     
     val leaderboardList = remember(selectedDateStr, myTodaySeconds, allUsers, currentUsername, currentUserRemote, currentUnixTime) {
-        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val prefKey = "friends_focus_leaderboard_$selectedDateStr"
         
         if (isToday) {
@@ -135,15 +137,9 @@ fun FriendsFocusLeaderboardTable(
             }
             
             val combined = (listOf(liveMe) + livePeers).sortedByDescending { it.focusedSeconds }
-            
-            val serialized = combined.joinToString("\n") { u ->
-                "${u.username};;;${u.displayName};;;${u.emoji};;;${u.focusedSeconds};;;${u.isMe}"
-            }
-            prefs.edit().putString(prefKey, serialized).apply()
-            
             combined
         } else {
-            val saved = prefs.getString(prefKey, null)
+            val saved = com.example.util.PrefsDataStore.getStringBlocking(context, prefKey, null)
             if (saved != null) {
                 saved.split("\n").mapNotNull { line ->
                     val parts = line.split(";;;")
@@ -202,9 +198,40 @@ fun FriendsFocusLeaderboardTable(
                 val serialized = sortedList.joinToString("\n") { u ->
                     "${u.username};;;${u.displayName};;;${u.emoji};;;${u.focusedSeconds};;;${u.isMe}"
                 }
-                prefs.edit().putString(prefKey, serialized).apply()
+                com.example.util.PrefsDataStore.putStringBlocking(context, prefKey, serialized)
                 
                 sortedList
+            }
+        }
+    }
+    
+    val currentLeaderboardList by rememberUpdatedState(leaderboardList)
+    
+    if (isToday) {
+        LaunchedEffect(selectedDateStr) {
+            while (true) {
+                kotlinx.coroutines.delay(30000L) // Save at most once every 30 seconds
+                val listToSave = currentLeaderboardList
+                if (listToSave.isNotEmpty()) {
+                    val prefKey = "friends_focus_leaderboard_$selectedDateStr"
+                    val serialized = listToSave.joinToString("\n") { u ->
+                        "${u.username};;;${u.displayName};;;${u.emoji};;;${u.focusedSeconds};;;${u.isMe}"
+                    }
+                    com.example.util.PrefsDataStore.putString(context, prefKey, serialized)
+                }
+            }
+        }
+
+        DisposableEffect(selectedDateStr) {
+            onDispose {
+                val listToSave = currentLeaderboardList
+                if (listToSave.isNotEmpty()) {
+                    val prefKey = "friends_focus_leaderboard_$selectedDateStr"
+                    val serialized = listToSave.joinToString("\n") { u ->
+                        "${u.username};;;${u.displayName};;;${u.emoji};;;${u.focusedSeconds};;;${u.isMe}"
+                    }
+                    com.example.util.PrefsDataStore.putStringBlocking(context, prefKey, serialized)
+                }
             }
         }
     }

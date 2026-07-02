@@ -41,7 +41,7 @@ jobs:
       run: |
         LOCAL_CODE=$(grep -E 'versionCode\s*=\s*customCode\s*\?\:\s*[0-9]+' app/build.gradle.kts | sed -E 's/.*versionCode\s*=\s*customCode\s*\?\:\s*([0-9]+).*/\1/')
         if [ -z "$LOCAL_CODE" ] || ! [[ "$LOCAL_CODE" =~ ^[0-9]+$ ]]; then
-          LOCAL_CODE=8
+          LOCAL_CODE=7
         fi
         
         echo "Local fallback versionCode is $LOCAL_CODE"
@@ -84,6 +84,29 @@ jobs:
     # We compile the automated release APK using the dynamically determined versionCode and versionName
     - name: Compile Automated Release APK
       run: ./gradlew assembleRelease -PcustomVersionCode=${{ env.VERSION_CODE }} -PcustomVersionName="${{ env.VERSION_NAME }}"
+
+    - name: Distribute Release APK to Firebase App Distribution
+      env:
+        FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_CREDENTIALS }}
+        FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+        FIREBASE_GROUPS: ${{ secrets.FIREBASE_GROUPS }}
+        FIREBASE_TESTERS: ${{ secrets.FIREBASE_TESTERS }}
+      if: env.FIREBASE_SERVICE_ACCOUNT != '' && env.FIREBASE_APP_ID != ''
+      run: |
+        echo "$FIREBASE_SERVICE_ACCOUNT" > firebase-key.json
+        export GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json
+        
+        CMD="npx firebase-tools appdistribution:distribute app/build/outputs/apk/release/app-release.apk --app \"$FIREBASE_APP_ID\""
+        CMD="$CMD --release-notes \"Automated release build #${{ github.run_number }} (Version Code: ${{ env.VERSION_CODE }}) uploaded via GitHub Actions.\""
+        
+        GROUPS_TO_USE="${FIREBASE_GROUPS:-testers}"
+        CMD="$CMD --groups \"$GROUPS_TO_USE\""
+        if [ -n "$FIREBASE_TESTERS" ]; then
+          CMD="$CMD --testers \"$FIREBASE_TESTERS\""
+        fi
+        
+        eval $CMD
+        rm -f firebase-key.json
 
     - name: Generate Public GitHub Release
       uses: softprops/action-gh-release@v2

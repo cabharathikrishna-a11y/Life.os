@@ -178,9 +178,9 @@ object GoogleDriveSyncManager {
 
                 // 6. Update FocusTimerManager live states on main thread
                 withContext(Dispatchers.Main) {
-                    FocusTimerManager.focusRecords.value = mergedRecords
-                    FocusTimerManager.totalFocusMinutes.value = finalTotalMinutes
-                    FocusTimerManager.todayPomosCount.value = finalPomosCount
+                    FocusTimerManager.setFocusRecords(mergedRecords)
+                    FocusTimerManager.setTotalFocusMinutes(finalTotalMinutes)
+                    FocusTimerManager.setTodayPomosCount(finalPomosCount)
                 }
 
                 Pair(true, "Successfully restored and merged ${remoteRecords.size} focus records from Google Drive!")

@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,24 +38,24 @@ fun TimerLiveControlContent(
     val context = LocalContext.current
     val WaterBlue = Color(0xFF38BDF8)
 
-    val isTimerActive by viewModel.isTimerRunning.collectAsState()
-    val timerSecondsRemaining by viewModel.timerSecondsLeft.collectAsState()
-    val isFocusPhase by viewModel.isFocusPhase.collectAsState()
-    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsState()
+    val isTimerActive by viewModel.isTimerRunning.collectAsStateWithLifecycle()
+    val timerSecondsRemaining by viewModel.timerSecondsLeft.collectAsStateWithLifecycle()
+    val isFocusPhase by viewModel.isFocusPhase.collectAsStateWithLifecycle()
+    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsStateWithLifecycle()
     val isInBreakMode = !isFocusPhase
 
-    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsState()
-    val isStopwatchActive by viewModel.isStopwatchActive.collectAsState()
-    val isTabFocusTimerSelected by viewModel.isTabFocusTimerSelected.collectAsState()
-    val wasStartedFromStopwatch by viewModel.wasStartedFromStopwatch.collectAsState()
+    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsStateWithLifecycle()
+    val isStopwatchActive by viewModel.isStopwatchActive.collectAsStateWithLifecycle()
+    val isTabFocusTimerSelected by viewModel.isTabFocusTimerSelected.collectAsStateWithLifecycle()
+    val wasStartedFromStopwatch by viewModel.wasStartedFromStopwatch.collectAsStateWithLifecycle()
 
     val isStopwatchOnOrActive = isStopwatchActive || stopwatchSeconds > 0
     val isTimerOnOrActive = isTimerActive || (timerSecondsRemaining < focusTimerDurationMins * 60)
 
-    val waterReminderEnabled by viewModel.waterReminderEnabled.collectAsState()
+    val waterReminderEnabled by viewModel.waterReminderEnabled.collectAsStateWithLifecycle()
     var soundPlayingNotification by remember { mutableStateOf<String?>(null) }
-    val selectedTask by viewModel.attachedTask.collectAsState()
-    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsState()
+    val selectedTask by viewModel.attachedTask.collectAsStateWithLifecycle()
+    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsStateWithLifecycle()
 
     Card(
         modifier = modifier.fillMaxSize(),

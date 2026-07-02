@@ -362,7 +362,7 @@ fun LiveControlTimerBar(
                 Button(
                     onClick = {
                         viewModel.setTabFocusTimerSelected(true)
-                        viewModel.setSessionStartTimestamp(System.currentTimeMillis())
+                        viewModel.setSessionStartTimestamp(com.example.util.StableTime.currentTimeMillis())
                         viewModel.startTimer()
                         viewModel.setTimerImmersive(true)
                     },

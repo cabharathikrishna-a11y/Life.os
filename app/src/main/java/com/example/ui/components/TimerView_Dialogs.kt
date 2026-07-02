@@ -223,7 +223,7 @@ fun TaskSelectionDialog(
                                             viewModel.attachTaskToTimer(task)
                                             viewModel.setShowTaskSelectionDialog(false)
                                             if (sessionStartTimestamp == null) {
-                                                viewModel.setSessionStartTimestamp(System.currentTimeMillis())
+                                                viewModel.setSessionStartTimestamp(com.example.util.StableTime.currentTimeMillis())
                                                 if (isTabFocusTimerSelected) {
                                                     viewModel.startTimer()
                                                 } else {
@@ -284,7 +284,7 @@ fun TaskSelectionDialog(
                             viewModel.attachTaskToTimer(null)
                             viewModel.setShowTaskSelectionDialog(false)
                             if (sessionStartTimestamp == null) {
-                                viewModel.setSessionStartTimestamp(System.currentTimeMillis())
+                                viewModel.setSessionStartTimestamp(com.example.util.StableTime.currentTimeMillis())
                                 if (isTabFocusTimerSelected) {
                                     viewModel.startTimer()
                                 } else {

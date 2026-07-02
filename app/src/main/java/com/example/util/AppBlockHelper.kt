@@ -316,6 +316,33 @@ object AppBlockHelper {
         return true
     }
 
+    fun checkForegroundAppAndBlockIfNeeded(context: Context, packageName: String) {
+        val isFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
+        if (!isFocusing) return
+
+        val strictPrefs = context.getSharedPreferences("strict_mode_prefs", Context.MODE_PRIVATE)
+        val strictEnabled = strictPrefs.getBoolean("strict_mode_enabled", true)
+
+        val isBlocked = if (strictEnabled) {
+            isPackageBlockedInStrictMode(context, packageName)
+        } else {
+            val blockedApps = strictPrefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
+            blockedApps.contains(packageName)
+        }
+
+        if (isBlocked) {
+            Log.w("AppBlocker", "Intercepted blocked app via Accessibility: $packageName")
+            
+            val blockIntent = Intent(context, com.example.ui.AppBlockInterceptActivity::class.java).apply {
+                putExtra("INTERCEPTED_PACKAGE", packageName)
+                putExtra("IS_LIMIT_BLOCK", false)
+                putExtra("IS_STRICT_MODE_INTERCEPT", strictEnabled)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+            context.startActivity(blockIntent)
+        }
+    }
+
     fun checkForegroundAppAndBlockIfNeeded(context: Context) {
         val isFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
         if (!isFocusing) return

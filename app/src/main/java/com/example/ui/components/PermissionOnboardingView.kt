@@ -64,6 +64,7 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
     var hasUsageStatsPermission by remember { mutableStateOf(false) }
     var hasDrivePermission by remember { mutableStateOf(false) }
     var hasPackageInstallPermission by remember { mutableStateOf(false) }
+    var hasExactAlarmPermission by remember { mutableStateOf(false) }
 
     // Drive automatic backup check & restore states
     var isCheckingDriveData by remember { mutableStateOf(false) }
@@ -91,6 +92,13 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
         hasDrivePermission = GoogleDriveSyncManager.hasDrivePermission(context)
         hasPackageInstallPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        hasExactAlarmPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
         } else {
             true
         }
@@ -279,11 +287,11 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
 
             // 3. Draw Over Other Apps Overlay Section
             PermissionCard(
-                title = "System Overlay (Optional)",
-                description = "Required to show the full-screen 'Focus Intercept' overlay when you attempt to open a blocked app (e.g. social media).",
+                title = "System Overlay (Mandatory)",
+                description = "Required to show the full-screen 'Focus Intercept' overlay when you attempt to open a blocked app (e.g. social media). Without this, Android background launch restrictions will silent-fail the app blocker.",
                 isGranted = hasOverlayPermission,
                 icon = Icons.Default.FlipToFront,
-                accentColor = if (hasOverlayPermission) SuccessGreen else AccentOrange,
+                accentColor = if (hasOverlayPermission) SuccessGreen else AlertRed,
                 buttonText = if (hasOverlayPermission) "Enabled" else "Configure Overlay",
                 onButtonClick = {
                     if (!hasOverlayPermission) {
@@ -396,10 +404,36 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
                 }
             )
 
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 7. Exact Alarm Permission Section (Mandatory)
+            PermissionCard(
+                title = "Exact Alarms Scheduling (Mandatory)",
+                description = "Required to guarantee that focus timers and alarm notifications fire precisely when expected. Without this, Android 14+ will block exact scheduling and crash the app.",
+                isGranted = hasExactAlarmPermission,
+                icon = Icons.Default.Alarm,
+                accentColor = if (hasExactAlarmPermission) SuccessGreen else AlertRed,
+                buttonText = if (hasExactAlarmPermission) "Granted" else "Grant Exact Alarms",
+                onButtonClick = {
+                    if (!hasExactAlarmPermission) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            try {
+                                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "Please open Settings and grant Schedule Exact Alarm permission manually.", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+            )
+
             Spacer(modifier = Modifier.height(32.dp))
 
             // Mandatory requirement warning card
-            val mandatoryGranted = isBatteryOptIgnored && hasPackageInstallPermission
+            val mandatoryGranted = isBatteryOptIgnored && hasPackageInstallPermission && hasExactAlarmPermission && hasOverlayPermission
             if (!mandatoryGranted) {
                 Card(
                     modifier = Modifier
@@ -421,7 +455,7 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
                             modifier = Modifier.size(24.dp)
                         )
                         Text(
-                            text = "Disabling battery optimization and enabling update installation are strictly mandatory to enter Life OS. Ensure both are configured above.",
+                            text = "Disabling battery optimization, granting exact alarms, enabling system overlay, and enabling update installation are strictly mandatory to enter Life OS. Ensure all four are configured above.",
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -437,7 +471,7 @@ fun PermissionOnboardingView(viewModel: AppViewModel) {
                     if (mandatoryGranted) {
                         viewModel.navigateTo(viewModel.getDefaultScreen())
                     } else {
-                        android.widget.Toast.makeText(context, "Please configure both mandatory options to proceed.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, "Please configure all mandatory options to proceed.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 },
                 colors = ButtonDefaults.buttonColors(

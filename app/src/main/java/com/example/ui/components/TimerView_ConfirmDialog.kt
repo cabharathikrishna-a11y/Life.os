@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,14 +32,14 @@ fun TimerConfirmDialogController(
     onSessionStartTimestampChange: (Long?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val showElapsedTimeDialog by viewModel.showElapsedTimeDialog.collectAsState()
-    val editHoursInput by viewModel.editHoursInput.collectAsState()
-    val editMinutesInput by viewModel.editMinutesInput.collectAsState()
-    val editSecondsInput by viewModel.editSecondsInput.collectAsState()
-    val stopSessionType by viewModel.stopSessionType.collectAsState()
-    val stoppedElapsedSeconds by viewModel.stoppedElapsedSeconds.collectAsState()
-    val focusNotesInput by viewModel.focusNotesInput.collectAsState()
-    val pendingFocusReview by viewModel.pendingFocusReview.collectAsState()
+    val showElapsedTimeDialog by viewModel.showElapsedTimeDialog.collectAsStateWithLifecycle()
+    val editHoursInput by viewModel.editHoursInput.collectAsStateWithLifecycle()
+    val editMinutesInput by viewModel.editMinutesInput.collectAsStateWithLifecycle()
+    val editSecondsInput by viewModel.editSecondsInput.collectAsStateWithLifecycle()
+    val stopSessionType by viewModel.stopSessionType.collectAsStateWithLifecycle()
+    val stoppedElapsedSeconds by viewModel.stoppedElapsedSeconds.collectAsStateWithLifecycle()
+    val focusNotesInput by viewModel.focusNotesInput.collectAsStateWithLifecycle()
+    val pendingFocusReview by viewModel.pendingFocusReview.collectAsStateWithLifecycle()
 
     var originalAutoSavedSeconds by remember { mutableStateOf(0) }
     var originalAutoSavedMinutes by remember { mutableStateOf(0) }
@@ -57,7 +58,7 @@ fun TimerConfirmDialogController(
             viewModel.setStopSessionType("timer") 
             viewModel.setStoppedElapsedSeconds(rSeconds)
             
-            onSessionStartTimestampChange(System.currentTimeMillis() - (rSeconds * 1000L))
+            onSessionStartTimestampChange(com.example.util.StableTime.currentTimeMillis() - (rSeconds * 1000L))
             
             isAutoSavedSessionActive = true
             autoSavedRecordId = review.id
@@ -109,6 +110,57 @@ fun TimerConfirmDialogController(
     }
 
     if (showElapsedTimeDialog) {
+        fun discardElapsedTimeSession() {
+            if (isAutoSavedSessionActive) {
+                val recordId = autoSavedRecordId
+                if (recordId != null) {
+                    val records = viewModel.focusRecords.value
+                    val originalRecord = records.find { it.id == recordId }
+                    if (originalRecord != null) {
+                        val durationMinutes = originalRecord.durationMinutes
+                        
+                        // 1. Subtract the focus minutes
+                        viewModel.addFocusMinutes(-durationMinutes)
+                        
+                        // 2. Subtract task minutes if any task was attached
+                        val task = originalAutoSavedTask
+                        if (task != null) {
+                            val updated = task.copy(actualMinutes = maxOf(0, task.actualMinutes - durationMinutes))
+                            viewModel.updateTask(updated)
+                            viewModel.attachTaskToTimer(updated)
+                        }
+                        
+                        // 3. Revert Pomodoro count if applicable
+                        if (stopSessionType == "timer" && durationMinutes >= focusTimerDurationMins) {
+                            viewModel.decrementTodayPomos()
+                        }
+                        
+                        // 4. Delete the record by ID
+                        viewModel.deleteFocusRecordById(recordId)
+                    }
+                }
+            }
+
+            com.example.util.FocusTimerManager.recordSessionCompleteOrReset(isSaving = false)
+
+            if (stopSessionType == "timer") {
+                viewModel.resetTimer(saveSession = false)
+            } else {
+                viewModel.resetStopwatch(saveSession = false)
+            }
+            viewModel.clearPendingFocusReview()
+            onSessionStartTimestampChange(null)
+            viewModel.setShowElapsedTimeDialog(false)
+            viewModel.setFocusNotesInput("")
+            viewModel.setTimerImmersive(false)
+
+            isAutoSavedSessionActive = false
+            autoSavedRecordId = null
+            originalAutoSavedSeconds = 0
+            originalAutoSavedMinutes = 0
+            originalAutoSavedTask = null
+        }
+
         fun saveAndCloseElapsedTimeSession() {
             val totalSeconds = editHoursInput * 3600 + editMinutesInput * 60 + editSecondsInput
             val finalMinutes = if (totalSeconds > 0) maxOf(1, (totalSeconds + 30) / 60) else 0
@@ -189,13 +241,13 @@ fun TimerConfirmDialogController(
             originalAutoSavedMinutes = 0
             originalAutoSavedTask = null
 
-            com.example.util.FocusTimerManager.globalVerificationFocusedTimeSeconds.value = totalSeconds
-            com.example.util.FocusTimerManager.globalVerificationRevisedTotalMinutes.value = com.example.util.FocusTimerManager.getTodayFocusMinutes()
-            com.example.util.FocusTimerManager.globalVerificationRevisedTotalSeconds.value = com.example.util.FocusTimerManager.getTodayFocusSeconds()
+            com.example.util.FocusTimerManager.setGlobalVerificationFocusedTimeSeconds(totalSeconds)
+            com.example.util.FocusTimerManager.setGlobalVerificationRevisedTotalMinutes(com.example.util.FocusTimerManager.getTodayFocusMinutes())
+            com.example.util.FocusTimerManager.setGlobalVerificationRevisedTotalSeconds(com.example.util.FocusTimerManager.getTodayFocusSeconds())
             if (com.example.util.FocusTimerManager.verifiedSessionStartMs.value == null) {
-                com.example.util.FocusTimerManager.verifiedSessionStartMs.value = System.currentTimeMillis() - totalSeconds * 1000L
+                com.example.util.FocusTimerManager.setVerifiedSessionStartMs(System.currentTimeMillis() - totalSeconds * 1000L)
             }
-            com.example.util.FocusTimerManager.showGlobalVerificationDialog.value = true
+            com.example.util.FocusTimerManager.setShowGlobalVerificationDialog(true)
         }
 
         Dialog(onDismissRequest = { saveAndCloseElapsedTimeSession() }) {
@@ -362,7 +414,7 @@ fun TimerConfirmDialogController(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
-                            onClick = { saveAndCloseElapsedTimeSession() },
+                            onClick = { discardElapsedTimeSession() },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.weight(1f)

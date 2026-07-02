@@ -54,6 +54,7 @@ fun SettingsTimerConfigurationPage(
         val stopwatchBreakDurationMinutes by viewModel.stopwatchBreakDurationMinutes.collectAsState()
         val autoStartStopwatchAfterBreak by viewModel.autoStartStopwatchAfterBreak.collectAsState()
         val antiBurnScreenEnabled by viewModel.antiBurnScreenEnabled.collectAsState()
+        val batterySaverModeEnabled by viewModel.batterySaverModeEnabled.collectAsState()
         val shareFocusDetailsEnabled by viewModel.shareFocusDetailsEnabled.collectAsState()
         val shareFocusHistoryEnabled by viewModel.shareFocusHistoryEnabled.collectAsState()
 
@@ -202,6 +203,31 @@ fun SettingsTimerConfigurationPage(
                         uncheckedTrackColor = Color.DarkGray
                     ),
                     modifier = Modifier.testTag("anti_burn_switch")
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0C0C0C), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Battery Saver Mode", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Disables background sync/alerts on close. Resumes timer precisely on app launch.", color = Color.Gray, fontSize = 10.sp)
+                }
+                Switch(
+                    checked = batterySaverModeEnabled,
+                    onCheckedChange = { viewModel.updateBatterySaverModeEnabled(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = WaterBlue,
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = Color.DarkGray
+                    ),
+                    modifier = Modifier.testTag("battery_saver_switch")
                 )
             }
 

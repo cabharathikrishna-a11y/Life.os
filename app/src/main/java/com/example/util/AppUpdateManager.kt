@@ -159,9 +159,9 @@ object AppUpdateManager {
     fun setReadyApkPath(context: Context, path: String?) {
         val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         if (path == null) {
-            prefs.edit().remove("pref_ready_apk_path").apply()
+            prefs.edit().remove("pref_ready_apk_path").commit()
         } else {
-            prefs.edit().putString("pref_ready_apk_path", path).apply()
+            prefs.edit().putString("pref_ready_apk_path", path).commit()
         }
     }
 
@@ -182,13 +182,29 @@ object AppUpdateManager {
     }
 
     /**
-     * Checks if the app was recently updated (current version code is higher than stored version code).
+     * Checks if the app was recently updated (current version code is higher than stored version code,
+     * or the app package has been reinstalled/rebuilt with a newer timestamp).
      * If so, clears pending update data, cleans up old downloaded APKs, and returns the new version code.
      */
     fun checkAndNotifyUpgradeComplete(context: Context): Int? {
         val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val lastKnown = prefs.getInt("pref_last_known_version_code", -1)
         val current = getCurrentVersionCode(context)
+        
+        // Retrieve last known update time of the package to detect fresh compilation/reinstall in AI Studio or store
+        val lastKnownUpdateTime = prefs.getLong("pref_last_known_update_time", 0L)
+        var packageReinstalled = false
+        var currentUpdateTime = 0L
+        try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            currentUpdateTime = packageInfo.lastUpdateTime
+            if (lastKnownUpdateTime > 0L && currentUpdateTime > lastKnownUpdateTime) {
+                packageReinstalled = true
+                Log.i(TAG, "Reinstall/Rebuild detected via package lastUpdateTime: $currentUpdateTime (previously: $lastKnownUpdateTime)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get package lastUpdateTime", e)
+        }
         
         val installTarget = prefs.getInt("pref_install_target_version", -1)
         val runningFirebase = getRunningFirebaseVersion(context)
@@ -206,6 +222,9 @@ object AppUpdateManager {
         
         if (lastKnown == -1) {
             prefs.edit().putInt("pref_last_known_version_code", current).apply()
+            if (currentUpdateTime > 0L) {
+                prefs.edit().putLong("pref_last_known_update_time", currentUpdateTime).apply()
+            }
             if (upgradeDetected) {
                 clearPendingUpdateVersion(context)
                 sendUpgradeNotification(context, upgradedToVersion)
@@ -214,12 +233,21 @@ object AppUpdateManager {
             return null
         }
         
-        if (current > lastKnown || upgradeDetected) {
+        if (current > lastKnown || upgradeDetected || packageReinstalled) {
+            Log.i(TAG, "Upgrade or reinstall condition met: current > lastKnown=${current > lastKnown}, upgradeDetected=$upgradeDetected, packageReinstalled=$packageReinstalled")
+            
+            prefs.edit().putInt("pref_last_known_version_code", current).apply()
+            if (currentUpdateTime > 0L) {
+                prefs.edit().putLong("pref_last_known_update_time", currentUpdateTime).apply()
+            }
+            
             if (current > lastKnown) {
                 Log.i(TAG, "Upgrade detected via Package Version Code! Upgraded from Build $lastKnown to Build $current")
-                prefs.edit().putInt("pref_last_known_version_code", current).apply()
                 setRunningFirebaseVersion(context, current)
                 upgradedToVersion = current
+            } else if (packageReinstalled) {
+                Log.i(TAG, "Upgrade/Reinstall synchronized via Package Last Update Time. Running Firebase version is updated.")
+                setRunningFirebaseVersion(context, maxOf(current, installTarget, runningFirebase))
             }
             
             clearPendingUpdateVersion(context)
@@ -240,6 +268,11 @@ object AppUpdateManager {
             
             sendUpgradeNotification(context, upgradedToVersion)
             return upgradedToVersion
+        }
+        
+        // Ensure we persist the current update time if it was never recorded
+        if (currentUpdateTime > 0L && lastKnownUpdateTime == 0L) {
+            prefs.edit().putLong("pref_last_known_update_time", currentUpdateTime).apply()
         }
         
         return null
@@ -868,6 +901,37 @@ object AppUpdateManager {
     }
 
     /**
+     * Checks if the downloaded file is a valid APK and has a version code strictly greater
+     * than the currently running version or the stored running Firebase version.
+     */
+    fun isValidAndNewerApk(context: Context, file: File): Boolean {
+        if (!isValidApk(file)) return false
+        return try {
+            val packageInfo = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+            if (packageInfo != null) {
+                val downloadedCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    packageInfo.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo.versionCode
+                }
+                val currentCode = getCurrentVersionCode(context)
+                val runningFirebase = getRunningFirebaseVersion(context)
+                val activeCode = maxOf(currentCode, runningFirebase)
+                val isNewer = downloadedCode > activeCode
+                Log.d(TAG, "isValidAndNewerApk: APK version code is $downloadedCode, currently active is $activeCode. isNewer = $isNewer")
+                isNewer
+            } else {
+                Log.w(TAG, "isValidAndNewerApk: Failed to read package archive info")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking downloaded APK version code", e)
+            false
+        }
+    }
+
+    /**
      * Downloads and installs the update.
      */
     suspend fun downloadAndInstallUpdate(context: Context, providedFileId: String?) {
@@ -1193,10 +1257,10 @@ object AppUpdateManager {
                 val targetVersion = getPendingUpdateVersion(context)
                 if (targetVersion > 0) {
                     val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                    prefs.edit().putInt("pref_install_target_version", targetVersion).apply()
+                    prefs.edit().putInt("pref_install_target_version", targetVersion).commit()
                 }
-                context.startActivity(intent)
                 setReadyApkPath(context, null)
+                context.startActivity(intent)
                 
                 // Set state back to idle so they can click download again if installation fails or is cancelled
                 _updateStatus.value = UpdateStatus.ReadyToInstall(apkFile)

@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -8,20 +6,6 @@ plugins {
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
   alias(libs.plugins.firebase.crashlytics)
-}
-
-// Decode debug.keystore from debug.keystore.base64 if it doesn't exist
-val rootKeystoreBase64 = file("${rootDir}/debug.keystore.base64")
-val rootKeystore = file("${rootDir}/debug.keystore")
-if (rootKeystoreBase64.exists() && (!rootKeystore.exists() || rootKeystore.length() == 0L)) {
-  try {
-    val base64Text = rootKeystoreBase64.readText().trim()
-    val decodedBytes = Base64.getDecoder().decode(base64Text)
-    rootKeystore.writeBytes(decodedBytes)
-    logger.lifecycle("Decoded debug.keystore from debug.keystore.base64 successfully to ${rootKeystore.absolutePath}")
-  } catch (e: Exception) {
-    logger.error("Failed to decode debug.keystore from base64: ${e.message}", e)
-  }
 }
 
 android {
@@ -52,17 +36,6 @@ android {
         keyPassword = System.getenv("KEY_PASSWORD")
       } else {
         val debugKeystore = file("${rootDir}/debug.keystore")
-        val base64File = file("${rootDir}/debug.keystore.base64")
-        if (!debugKeystore.exists() && base64File.exists()) {
-          try {
-            val base64Text = base64File.readText().trim()
-            val decodedBytes = Base64.getDecoder().decode(base64Text)
-            debugKeystore.writeBytes(decodedBytes)
-            logger.lifecycle("Decoded debug.keystore successfully in signingConfigs fallback")
-          } catch (e: Exception) {
-            logger.error("Failed to decode debug.keystore in signingConfigs fallback: ${e.message}", e)
-          }
-        }
         storeFile = debugKeystore
         storePassword = "android"
         keyAlias = "androiddebugkey"
@@ -106,6 +79,10 @@ secrets {
   defaultPropertiesFileName = ".env.example"
 }
 
+ksp {
+  arg("room.schemaLocation", "${projectDir}/schemas")
+}
+
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
@@ -125,7 +102,8 @@ dependencies {
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.startup)
-  // implementation(libs.androidx.datastore.preferences)
+  implementation(libs.androidx.work.runtime.ktx)
+  implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -136,6 +114,7 @@ dependencies {
   implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.database)
   implementation(libs.firebase.analytics)
   implementation(libs.firebase.crashlytics)
   implementation(libs.firebase.perf)

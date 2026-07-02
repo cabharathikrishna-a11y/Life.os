@@ -203,6 +203,9 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     private val _antiBurnScreenEnabled = MutableStateFlow(false)
     val antiBurnScreenEnabled: StateFlow<Boolean> = _antiBurnScreenEnabled.asStateFlow()
 
+    private val _batterySaverModeEnabled = MutableStateFlow(false)
+    val batterySaverModeEnabled: StateFlow<Boolean> = _batterySaverModeEnabled.asStateFlow()
+
     private val _showOverlayEnabled = MutableStateFlow(true)
     val showOverlayEnabled: StateFlow<Boolean> = _showOverlayEnabled.asStateFlow()
 
@@ -838,7 +841,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     val focusTags: StateFlow<List<String>> = FocusTimerManager.focusTags
 
     fun attachTagToTimer(tag: String) {
-        FocusTimerManager.attachedTag.value = tag
+        FocusTimerManager.setAttachedTag(tag)
         FocusTimerManager.saveActiveSessionState(getApplication())
     }
 
@@ -931,6 +934,20 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     }
 
     init {
+        refreshCompletedTasks()
+        viewModelScope.launch {
+            while (true) {
+                delay(20000)
+                refreshCompletedTasks()
+            }
+        }
+
+        viewModelScope.launch {
+            com.example.api.FirebaseRepository.usersState.collect { users ->
+                _allUsers.value = users
+            }
+        }
+
         // Initialize local native Gemma on-device inference engine if present
         viewModelScope.launch(Dispatchers.IO) {
             com.example.util.LocalGemmaInferenceManager.initialize(application)
@@ -997,7 +1014,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                 } else if (state.isTimerOn || state.isSwOn) {
                     if (_sessionStartTimestamp.value == null) {
                         val activeSecs = if (state.isTimerOn) state.cumSecs else state.swSecs
-                        _sessionStartTimestamp.value = System.currentTimeMillis() - (activeSecs * 1000L)
+                        _sessionStartTimestamp.value = com.example.util.StableTime.currentTimeMillis() - (activeSecs * 1000L)
                     }
                 } else {
                     _sessionStartTimestamp.value = null
@@ -1009,7 +1026,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         viewModelScope.launch {
             FocusTimerManager.stopwatchLimitReached.collect { reached ->
                 if (reached) {
-                    FocusTimerManager.stopwatchLimitReached.value = false // Reset
+                    FocusTimerManager.setStopwatchLimitReached(false) // Reset
                     // Auto open confirmation pop up with 12 hour limit
                     setStopSessionType("stopwatch")
                     setStoppedElapsedSeconds(43200)
@@ -1141,6 +1158,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         _taskVibrationEnabled.value = prefs.getBoolean("task_vibration_enabled", true)
         _additionalReminderTimes.value = prefs.getString("additional_reminder_times", "") ?: ""
         _antiBurnScreenEnabled.value = prefs.getBoolean("anti_burn_screen_enabled", false)
+        _batterySaverModeEnabled.value = prefs.getBoolean("battery_saver_mode", false)
         _showOverlayEnabled.value = prefs.getBoolean("show_overlay_on_exit", true)
         _floatingTimerSize.value = prefs.getString("floating_timer_size", "large") ?: "large"
         _keepNotificationEnabled.value = prefs.getBoolean("keep_notification_enabled", true)
@@ -1278,7 +1296,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                                     reconcileRemoteFocusState(mergedMyUser)
                                 }
                             }
-                            _allUsers.value = mutableUsers
+                            com.example.api.FirebaseRepository.updateUsers(mutableUsers)
                             
                             // Check and show rank comparison/motivation popup
                             checkAndShowRankPopup(getApplication())
@@ -1401,7 +1419,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         
         val startSecs = if (isFocusing) {
             val startMs = _sessionStartTimestamp.value
-            if (startMs != null) startMs / 1000L else (System.currentTimeMillis() / 1000L)
+            if (startMs != null) startMs / 1000L else (com.example.util.StableTime.currentTimeMillis() / 1000L)
         } else {
             0L
         }
@@ -1420,7 +1438,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         
         // Even if not active running (paused/on break), we still show the focus time obtained so far during this current session
         // Note: Only actual focus time is added (not paused/break), which is exactly cumSecs or swSecs!
-        val activeSessionSeconds = if (isFocusPhase) {
+        val activeSessionSeconds = if (isFocusPhase && FocusTimerManager.pendingFocusReview.value == null) {
             if (cumSecs > 0) cumSecs else if (swSecs > 0) swSecs else 0
         } else {
             0
@@ -1490,7 +1508,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         var needsReset = false
         if (lastResetDate != todayStr) {
             android.util.Log.i("AppViewModel", "Midnight detected in poll! Resetting today's focus metrics.")
-            FocusTimerManager.todayPomosCount.value = 0
+            FocusTimerManager.setTodayPomosCount(0)
             prefs.edit()
                 .putInt("today_pomos_count", 0)
                 .putString("last_midnight_reset_date", todayStr)
@@ -1648,7 +1666,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                     localRecords.sortByDescending { it.startTime }
                     
                     // Update StateFlow & SharedPreferences
-                    FocusTimerManager.focusRecords.value = localRecords
+                    FocusTimerManager.setFocusRecords(localRecords)
                     
                     // We also need to save them using the companion method
                     val serialized = localRecords.joinToString("\n") { 
@@ -1662,8 +1680,8 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                     val todayRecsNum = localRecords.filter { it.dateString == todayStr }.size
                     val totalMins = localRecords.sumOf { it.durationMinutes }
                     
-                    FocusTimerManager.todayPomosCount.value = todayRecsNum
-                    FocusTimerManager.totalFocusMinutes.value = totalMins
+                    FocusTimerManager.setTodayPomosCount(todayRecsNum)
+                    FocusTimerManager.setTotalFocusMinutes(totalMins)
                     
                     prefs.edit()
                         .putInt("today_pomos_count", todayRecsNum)
@@ -1703,9 +1721,9 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                         if (FocusTimerManager.isTimerRunning.value) {
                             FocusTimerManager.pauseTimer(context)
                         }
-                        FocusTimerManager.accumulatedSessionTimeMs.value = remoteUser.accumulatedTimeMs
-                        FocusTimerManager.lastResumeTimeMs.value = remoteUser.lastResumeTimeMs
-                        FocusTimerManager.stopwatchSeconds.value = elapsedSeconds
+                        FocusTimerManager.setAccumulatedSessionTimeMs(remoteUser.accumulatedTimeMs)
+                        FocusTimerManager.setLastResumeTimeMs(remoteUser.lastResumeTimeMs)
+                        FocusTimerManager.setStopwatchSeconds(elapsedSeconds)
                         if (!isLocalStopwatchRunning) {
                             FocusTimerManager.startStopwatch(context)
                         }
@@ -1721,9 +1739,9 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                             if (FocusTimerManager.isStopwatchActive.value) {
                                 FocusTimerManager.pauseStopwatch(context)
                             }
-                            FocusTimerManager.accumulatedSessionTimeMs.value = remoteUser.accumulatedTimeMs
-                            FocusTimerManager.lastResumeTimeMs.value = remoteUser.lastResumeTimeMs
-                            FocusTimerManager.timerSecondsLeft.value = actualSecondsLeft
+                            FocusTimerManager.setAccumulatedSessionTimeMs(remoteUser.accumulatedTimeMs)
+                            FocusTimerManager.setLastResumeTimeMs(remoteUser.lastResumeTimeMs)
+                            FocusTimerManager.setTimerSecondsLeft(actualSecondsLeft)
                             if (!isLocalTimerRunning) {
                                 FocusTimerManager.startTimer(context)
                             }
@@ -1929,12 +1947,26 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         )
     }
 
+    fun deleteFocusRecordById(id: String) {
+        FocusTimerManager.deleteFocusRecordById(getApplication(), id)
+        syncFocusStateToFirebase(
+            FocusTimerManager.isTimerRunning.value,
+            FocusTimerManager.isStopwatchActive.value,
+            FocusTimerManager.cumulativeSessionFocusSeconds.value,
+            FocusTimerManager.stopwatchSeconds.value
+        )
+    }
+
     fun clearPendingFocusReview() {
         FocusTimerManager.clearPendingFocusReview()
     }
 
     fun incrementTodayPomos() {
         FocusTimerManager.incrementTodayPomos(getApplication())
+    }
+
+    fun decrementTodayPomos() {
+        FocusTimerManager.decrementTodayPomos(getApplication())
     }
 
     fun addFocusMinutes(mins: Int) {
@@ -1980,6 +2012,11 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     fun updateVibrationEnabled(enabled: Boolean) {
         _vibrationEnabled.value = enabled
         prefs.edit().putBoolean("vibration_enabled", enabled).apply()
+    }
+
+    fun updateBatterySaverModeEnabled(enabled: Boolean) {
+        _batterySaverModeEnabled.value = enabled
+        prefs.edit().putBoolean("battery_saver_mode", enabled).apply()
     }
 
     // Inter-link state for Tasks and Calendar creation
@@ -2683,8 +2720,26 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     // ==========================================
     // 1. Task Management State
     // ==========================================
-    val tasks: StateFlow<List<Task>> = repository.allTasks
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _completedTasks = MutableStateFlow<List<Task>>(emptyList())
+    val completedTasks: StateFlow<List<Task>> = _completedTasks.asStateFlow()
+
+    fun refreshCompletedTasks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val list = repository.db.taskDao().getCompletedTasksDirect()
+                _completedTasks.value = list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    val tasks: StateFlow<List<Task>> = combine(
+        repository.allTasks,
+        _completedTasks
+    ) { active, completed ->
+        active + completed
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun createTask(title: String, description: String, estMin: Int, category: String, parentId: Int? = null, nag: Boolean = false, priority: String = "MEDIUM", dueDateString: String = "", isCompleted: Boolean = false) {
         viewModelScope.launch {
@@ -2703,6 +2758,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             val savedTask = task.copy(id = insertedId.toInt())
             com.example.util.AlarmScheduler.scheduleReminder(getApplication(), savedTask)
             triggerSilentCalendarSync()
+            refreshCompletedTasks()
         }
     }
 
@@ -2729,6 +2785,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             } else {
                 com.example.util.AlarmScheduler.scheduleReminder(getApplication(), task)
             }
+            refreshCompletedTasks()
         }
     }
 
@@ -2762,6 +2819,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             } else {
                 com.example.util.AlarmScheduler.scheduleReminder(getApplication(), updatedTask)
             }
+            refreshCompletedTasks()
         }
     }
 
@@ -2781,6 +2839,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
             repository.deleteTask(task)
             com.example.util.AlarmScheduler.cancelReminder(getApplication(), task.id)
             triggerSilentCalendarSync()
+            refreshCompletedTasks()
         }
     }
 
@@ -2881,7 +2940,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     val isTabFocusTimerSelected: StateFlow<Boolean> = FocusTimerManager.isTabFocusTimerSelected
 
     fun setTabFocusTimerSelected(selected: Boolean) {
-        FocusTimerManager.isTabFocusTimerSelected.value = selected
+        FocusTimerManager.setTabFocusTimerSelected(selected)
     }
 
     fun startStopwatch() {
@@ -2916,7 +2975,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     }
 
     fun setStopwatchSeconds(seconds: Int) {
-        FocusTimerManager.stopwatchSeconds.value = seconds
+        FocusTimerManager.setStopwatchSeconds(seconds)
     }
 
     val timerSoundEnabled: StateFlow<Boolean> = FocusTimerManager.soundEnabled
@@ -2945,22 +3004,22 @@ class AppViewModel(application: Application, private val repository: LocalReposi
     }
 
     fun switchToFocusPhaseFromStopwatch() {
-        FocusTimerManager.isFocusPhase.value = true
-        FocusTimerManager.wasStartedFromStopwatch.value = false
-        FocusTimerManager.isTabFocusTimerSelected.value = false
+        FocusTimerManager.setFocusPhase(true)
+        FocusTimerManager.setWasStartedFromStopwatch(false)
+        FocusTimerManager.setTabFocusTimerSelected(false)
         FocusTimerManager.saveActiveSessionState(getApplication())
         com.example.service.KeepAliveService.updateNotification(getApplication())
     }
 
     fun resetWorkPhaseTimer(durationMins: Int) {
-        FocusTimerManager.isFocusPhase.value = true
-        FocusTimerManager.timerSecondsLeft.value = durationMins * 60
+        FocusTimerManager.setFocusPhase(true)
+        FocusTimerManager.setTimerSecondsLeft(durationMins * 60)
         FocusTimerManager.saveActiveSessionState(getApplication())
         com.example.service.KeepAliveService.updateNotification(getApplication())
     }
 
     fun switchToFocusPhase() {
-        FocusTimerManager.isFocusPhase.value = true
+        FocusTimerManager.setFocusPhase(true)
         FocusTimerManager.saveActiveSessionState(getApplication())
         com.example.service.KeepAliveService.updateNotification(getApplication())
     }
@@ -3071,7 +3130,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
                 emoji = cachedEmoji
             )
         }
-        val ts = System.currentTimeMillis()
+        val ts = com.example.util.StableTime.currentTimeMillis()
         
         val isTimerActive = FocusTimerManager.isTimerRunning.value
         val isSwActive = FocusTimerManager.isStopwatchActive.value
@@ -3135,7 +3194,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
         } ?: 0
         // Even if not active running (paused/on break), we still show the focus time obtained so far during this current session
         // Note: Only actual focus time is added (not paused/break), which is exactly cumSecs or swSecs!
-        val activeSessionSeconds = if (isFocusPhase) {
+        val activeSessionSeconds = if (isFocusPhase && FocusTimerManager.pendingFocusReview.value == null) {
             if (cumSecs > 0) cumSecs else if (swSecs > 0) swSecs else 0
         } else {
             0
@@ -3864,6 +3923,17 @@ class AppViewModel(application: Application, private val repository: LocalReposi
 
     fun addFile(name: String, path: String, size: Long, mimeType: String, uriString: String) {
         viewModelScope.launch {
+            try {
+                val uri = android.net.Uri.parse(uriString)
+                if (uri.scheme == "content") {
+                    getApplication<android.app.Application>().contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            } catch (e: Exception) {
+                // Ignore if not takeable or not persistable
+            }
             repository.insertFile(
                 AppFile(
                     name = name,

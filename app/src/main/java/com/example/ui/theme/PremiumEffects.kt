@@ -19,13 +19,15 @@ import androidx.compose.ui.unit.dp
 
 // Create a modern set of Compose premium graphics and animation helpers
 object PremiumEffects {
-    // 1. Premium bouncy spring press reaction
+    // 1. Premium bouncy spring press reaction with 500ms default debounce protection
     fun Modifier.bouncyClick(
         stiffness: Float = Spring.StiffnessMediumLow,
         dampingRatio: Float = Spring.DampingRatioMediumBouncy,
+        debounceIntervalMs: Long = 500L,
         onClick: () -> Unit
     ): Modifier = composed {
         var isPressed by remember { mutableStateOf(false) }
+        var lastClickTime by remember { mutableStateOf(0L) }
         val scale by animateFloatAsState(
             targetValue = if (isPressed) 0.94f else 1.0f,
             animationSpec = spring(
@@ -50,7 +52,13 @@ object PremiumEffects {
                             isPressed = false
                         }
                     },
-                    onTap = { onClick() }
+                    onTap = {
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastClickTime >= debounceIntervalMs) {
+                            lastClickTime = currentTime
+                            onClick()
+                        }
+                    }
                 )
             }
     }

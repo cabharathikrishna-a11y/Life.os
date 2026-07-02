@@ -37,13 +37,18 @@ fun FocusSummaryCard(
         focusRecords.filter { it.dateString == todayStr || it.dateString.isEmpty() }
     }
     
-    val todaySecs = remember(focusRecords, todayStr, liveAddedSeconds) {
-        val completedTodaySecs = focusRecords.sumOf { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, todayStr) }
+    val completedTodaySecs = remember(focusRecords, todayStr) {
+        focusRecords.sumOf { com.example.util.FocusTimerManager.getOverlapSecondsForDate(it, todayStr) }
+    }
+    val todaySecs = remember(completedTodaySecs, liveAddedSeconds) {
         completedTodaySecs + liveAddedSeconds
     }
 
-    val totalSecs = remember(focusRecords, liveAddedSeconds) {
-        focusRecords.sumOf { it.durationSeconds } + liveAddedSeconds
+    val completedTotalSecs = remember(focusRecords) {
+        focusRecords.sumOf { it.durationSeconds }
+    }
+    val totalSecs = remember(completedTotalSecs, liveAddedSeconds) {
+        completedTotalSecs + liveAddedSeconds
     }
     
     var activeGroupTab by remember { mutableStateOf(1) } // 0 = By Task, 1 = By Tag

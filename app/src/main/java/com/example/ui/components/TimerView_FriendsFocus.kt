@@ -150,7 +150,7 @@ fun FriendsFocusDetailsDialog(
     ): Int {
         if (dateStr == todayStr) {
             if (isMe) {
-                val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
+                val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value && FocusTimerManager.pendingFocusReview.value == null
                 val completedTodaySecs = FocusTimerManager.focusRecords.value.sumOf { FocusTimerManager.getOverlapSecondsForDate(it, todayStr) }
                 val pendingSecs = FocusTimerManager.pendingFocusReview.value?.let { FocusTimerManager.getOverlapSecondsForDate(it, todayStr) } ?: 0
                 val activeSessionOverlap = if (isLocalFocusing) {
@@ -158,12 +158,16 @@ fun FriendsFocusDetailsDialog(
                     if (startMs != null) {
                         FocusTimerManager.getActiveSessionOverlapSeconds(startMs, todayStr)
                     } else {
-                        val currentChunkMs = FocusTimerManager.lastResumeTimeMs.value?.let { System.currentTimeMillis() - it } ?: 0L
+                        val currentChunkMs = FocusTimerManager.getCurrentChunkMs()
                         val totalMs = FocusTimerManager.accumulatedSessionTimeMs.value + currentChunkMs
                         (totalMs / 1000).toInt()
                     }
                 } else {
-                    (FocusTimerManager.accumulatedSessionTimeMs.value / 1000).toInt()
+                    if (FocusTimerManager.pendingFocusReview.value == null) {
+                        (FocusTimerManager.accumulatedSessionTimeMs.value / 1000).toInt()
+                    } else {
+                        0
+                    }
                 }
 
                 return completedTodaySecs + pendingSecs + activeSessionOverlap
@@ -727,7 +731,7 @@ fun LiveDurationText(
                 kotlinx.coroutines.delay(1000L)
                 val currentUnixTime = System.currentTimeMillis() / 1000
                 if (isMe) {
-                    val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
+                    val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value && FocusTimerManager.pendingFocusReview.value == null
                     val completedTodaySecs = FocusTimerManager.focusRecords.value.sumOf { FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) }
                     val pendingSecs = FocusTimerManager.pendingFocusReview.value?.let { FocusTimerManager.getOverlapSecondsForDate(it, systemTodayStr) } ?: 0
                     val activeSessionOverlap = if (isLocalFocusing) {
@@ -735,7 +739,7 @@ fun LiveDurationText(
                         if (startMs != null) {
                             FocusTimerManager.getActiveSessionOverlapSeconds(startMs, systemTodayStr)
                         } else {
-                            val currentChunkMs = FocusTimerManager.lastResumeTimeMs.value?.let { System.currentTimeMillis() - it } ?: 0L
+                            val currentChunkMs = FocusTimerManager.getCurrentChunkMs()
                             val totalMs = FocusTimerManager.accumulatedSessionTimeMs.value + currentChunkMs
                             (totalMs / 1000).toInt()
                         }

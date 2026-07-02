@@ -20,6 +20,6 @@ object FirebaseConfig {
 
     fun setDatabaseUrl(context: Context, url: String) {
         val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("custom_firebase_db_url", url).apply()
+        prefs.edit().putString("custom_firebase_db_url", url).commit()
     }
 }

@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.example.data.Task
 import com.example.receiver.TaskReminderReceiver
@@ -404,5 +405,56 @@ object AlarmScheduler {
         }
 
         return triggerCal.timeInMillis
+    }
+
+    const val TIMER_ALARM_REQUEST_CODE = 99999
+
+    fun scheduleTimerEndAlarm(context: Context, durationSeconds: Int) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Android 14+ Security Check: Ensure we are allowed to schedule exact alarms
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+            Log.e("AlarmScheduler", "Missing SCHEDULE_EXACT_ALARM permission. Cannot wake from Doze.")
+            return
+        }
+
+        val intent = Intent(context, com.example.receiver.TimerAlertReceiver::class.java).apply {
+            action = "com.example.action.TIMER_FINISHED"
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            TIMER_ALARM_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val triggerTimeRealtime = SystemClock.elapsedRealtime() + (durationSeconds * 1000L)
+
+        // Wakes up the CPU even if it is in deep sleep Doze mode.
+        try {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerTimeRealtime,
+                pendingIntent
+            )
+            Log.d("AlarmScheduler", "Unbreakable timer alarm scheduled for $durationSeconds seconds from now.")
+        } catch (e: SecurityException) {
+            Log.e("AlarmScheduler", "Failed to set exact alarm: ${e.message}")
+        }
+    }
+
+    fun cancelTimerEndAlarm(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, com.example.receiver.TimerAlertReceiver::class.java).apply {
+            action = "com.example.action.TIMER_FINISHED"
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            TIMER_ALARM_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
     }
 }

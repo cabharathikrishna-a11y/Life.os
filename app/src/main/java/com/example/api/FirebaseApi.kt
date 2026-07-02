@@ -58,6 +58,18 @@ interface FirebaseApi {
         @Path("username") username: String
     ): retrofit2.Response<Unit>
 
+    @GET("friends_focus_states/{username}.json")
+    suspend fun getFriendsFocusStates(
+        @Path("username") username: String
+    ): retrofit2.Response<Map<String, UserRemote>?>
+
+    @PUT("friends_focus_states/{username}/{friend}.json")
+    suspend fun putFriendFocusState(
+        @Path("username") username: String,
+        @Path("friend") friend: String,
+        @Body state: UserRemote
+    ): UserRemote
+
     @GET("bells/{username}.json")
     suspend fun getBellSignal(
         @Path("username") username: String
@@ -116,7 +128,13 @@ object FirebaseClient {
     private var cachedUrl: String? = null
 
     @Volatile
-    var appContext: android.content.Context? = null
+    private var appContextRef: java.lang.ref.WeakReference<android.content.Context>? = null
+
+    var appContext: android.content.Context?
+        get() = appContextRef?.get()
+        set(value) {
+            appContextRef = value?.let { java.lang.ref.WeakReference(it.applicationContext) }
+        }
 
     val api: FirebaseApi
         get() {
@@ -136,7 +154,7 @@ object FirebaseClient {
         }
 
     @Volatile
-    var activeUrl: String = FirebaseConfig.DATABASE_URL
+    var activeUrl: String = if (FirebaseConfig.DATABASE_URL.endsWith("/")) FirebaseConfig.DATABASE_URL else "${FirebaseConfig.DATABASE_URL}/"
         set(value) {
             val sanitized = if (value.endsWith("/")) value else "$value/"
             field = sanitized
@@ -155,7 +173,6 @@ class InterceptingFirebaseApi(
     }
 
     override suspend fun getUsers(): retrofit2.Response<Map<String, UserRemote>?> {
-        // GET requests are allowed so the tester can see other users' details
         return delegate.getUsers()
     }
 
@@ -165,7 +182,32 @@ class InterceptingFirebaseApi(
             android.util.Log.d("InterceptingFirebase", "Bypassing putUser for username: $username in Tester Mode")
             return user
         }
-        return delegate.putUser(username, user)
+        val result = delegate.putUser(username, user)
+        try {
+            val otherUsers = (FirebaseRepository.getUsers().keys + listOf("madhavan", "shalini", "subash"))
+                .filter { it.isNotEmpty() && it != username && it != "admin" }
+                .distinct()
+            for (other in otherUsers) {
+                delegate.putFriendFocusState(other, username, user)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InterceptingFirebase", "Failed to fan out user focus state: ${e.message}", e)
+        }
+        return result
+    }
+
+    override suspend fun getFriendsFocusStates(username: String): retrofit2.Response<Map<String, UserRemote>?> {
+        if (isTester() || username == "tester_mode_user") {
+            return retrofit2.Response.success(emptyMap())
+        }
+        return delegate.getFriendsFocusStates(username)
+    }
+
+    override suspend fun putFriendFocusState(username: String, friend: String, state: UserRemote): UserRemote {
+        if (isTester() || username == "tester_mode_user") {
+            return state
+        }
+        return delegate.putFriendFocusState(username, friend, state)
     }
 
     override suspend fun deleteUser(username: String): retrofit2.Response<Unit> {

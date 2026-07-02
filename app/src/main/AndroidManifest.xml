@@ -30,6 +30,9 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Declare camera feature as optional for ChromeOS and tablet compatibility -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -113,9 +116,26 @@
                 android:value="Reliable wake-state tracking and background scheduler core daemon" />
         </service>
 
+        <service
+            android:name=".service.AppBlockAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".receiver.TaskReminderReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".receiver.TimerAlertReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.action.TIMER_FINISHED" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".receiver.BootReceiver"

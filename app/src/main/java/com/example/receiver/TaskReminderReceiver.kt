@@ -160,9 +160,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
     }
 
     private fun triggerAllDayTasksNotification(context: Context) {
-        val database = com.example.data.AppDatabase.getInstance(context)
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val database = com.example.data.AppDatabase.getInstance(context)
                 val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
                 val tasksList = database.taskDao().getAllTasks().first()
                 
@@ -225,9 +225,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
     }
 
     private fun triggerOnThisDayNotification(context: Context) {
-        val database = com.example.data.AppDatabase.getInstance(context)
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val database = com.example.data.AppDatabase.getInstance(context)
                 val currentDayMonth = java.text.SimpleDateFormat("MM-dd", java.util.Locale.US).format(java.util.Date())
                 val entriesList = database.journalDao().getAllJournalEntries().first()
                 val matchedAnniversaryEntries = entriesList.filter { it.dateString.endsWith(currentDayMonth) }

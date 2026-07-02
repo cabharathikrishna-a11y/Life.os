@@ -466,7 +466,7 @@ fun LiveRecordDurationText(
         while (true) {
             kotlinx.coroutines.delay(1000L)
             if (isMe) {
-                val currentChunkMs = FocusTimerManager.lastResumeTimeMs.value?.let { System.currentTimeMillis() - it } ?: 0L
+                val currentChunkMs = FocusTimerManager.getCurrentChunkMs()
                 val totalMs = FocusTimerManager.accumulatedSessionTimeMs.value + currentChunkMs
                 durationSeconds = (totalMs / 1000).toInt()
             } else if (peerRemote != null) {

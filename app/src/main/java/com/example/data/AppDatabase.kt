@@ -1,6 +1,8 @@
 package com.example.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ==========================================
@@ -128,17 +130,37 @@ data class AppFile(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "focus_records")
+data class FocusRecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val taskTitle: String = "",
+    val tag: String = "",
+    val notes: String = "",
+    val durationSeconds: Int = 0,
+    val durationMinutes: Int = 0,
+    val dateString: String = "", // e.g., "yyyy-MM-dd"
+    val startTime: String = "",  // e.g., "14:30"
+    val endTime: String = "",    // e.g., "14:55"
+    val timestamp: Long = System.currentTimeMillis() // Universal sorting anchor
+)
+
 // ==========================================
 // 2. DAOs
 // ==========================================
 
 @Dao
 interface TaskDao {
-    @Query("SELECT * FROM tasks ORDER BY id DESC")
+    @Query("SELECT * FROM tasks WHERE isCompleted = 0 ORDER BY id DESC")
     fun getAllTasks(): Flow<List<Task>>
 
     @Query("SELECT * FROM tasks ORDER BY id DESC")
     suspend fun getAllTasksDirect(): List<Task>
+
+    @Query("SELECT * FROM tasks WHERE isCompleted = 1 ORDER BY id DESC")
+    suspend fun getCompletedTasksDirect(): List<Task>
+
+    @Query("SELECT * FROM tasks WHERE isCompleted = 0 AND dueDateString != ''")
+    suspend fun getActiveTasksWithDeadlines(): List<Task>
 
     @Query("SELECT * FROM tasks WHERE parentTaskId = :parentId")
     fun getSubtasks(parentId: Int): Flow<List<Task>>
@@ -284,6 +306,25 @@ interface AppFileDao {
 }
 
 @Dao
+interface FocusRecordDao {
+    @Query("SELECT * FROM focus_records ORDER BY timestamp DESC")
+    fun getAllRecords(): Flow<List<FocusRecordEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRecord(record: FocusRecordEntity): Long
+
+    @Update
+    suspend fun updateRecord(record: FocusRecordEntity)
+
+    @Delete
+    suspend fun deleteRecord(record: FocusRecordEntity)
+
+    // Specific query to pull today's stats efficiently without loading all history
+    @Query("SELECT * FROM focus_records WHERE dateString = :dateStr")
+    suspend fun getRecordsForDate(dateStr: String): List<FocusRecordEntity>
+}
+
+@Dao
 interface CustomListDao {
     @Query("SELECT * FROM custom_lists ORDER BY name ASC")
     fun getAllLists(): Flow<List<CustomList>>
@@ -424,6 +465,27 @@ interface FinanceCategoryDao {
 // 3. Database
 // ==========================================
 
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `focus_records` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `taskTitle` TEXT NOT NULL,
+                `tag` TEXT NOT NULL,
+                `notes` TEXT NOT NULL,
+                `durationSeconds` INTEGER NOT NULL,
+                `durationMinutes` INTEGER NOT NULL,
+                `dateString` TEXT NOT NULL,
+                `startTime` TEXT NOT NULL,
+                `endTime` TEXT NOT NULL,
+                `timestamp` INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
     entities = [
         Task::class,
@@ -440,10 +502,11 @@ interface FinanceCategoryDao {
         FinancialAccount::class,
         FinancialLog::class,
         FinanceTransaction::class,
-        FinanceCategory::class
+        FinanceCategory::class,
+        FocusRecordEntity::class
     ],
-    version = 12,
-    exportSchema = false
+    version = 13,
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
@@ -460,6 +523,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun financialLogDao(): FinancialLogDao
     abstract fun financeTransactionDao(): FinanceTransactionDao
     abstract fun financeCategoryDao(): FinanceCategoryDao
+    abstract fun focusRecordDao(): FocusRecordDao
 
     companion object {
         @Volatile
@@ -470,7 +534,9 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = androidx.room.Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java, "life_os_database"
-                ).fallbackToDestructiveMigration().build()
+                )
+                .addMigrations(MIGRATION_12_13)
+                .build()
                 INSTANCE = instance
                 instance
             }

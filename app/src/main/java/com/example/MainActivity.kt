@@ -10,6 +10,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 import com.example.util.FocusTimerManager
 import androidx.activity.compose.BackHandler
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.WindowInsets
@@ -60,11 +61,15 @@ class MainActivity : ComponentActivity() {
     private var startupException: Throwable? = null
     private val isAppUnlockedState = androidx.compose.runtime.mutableStateOf(false)
     private val interceptedAppSessionQuery = androidx.compose.runtime.mutableStateOf<String?>(null)
+    private val isDbReady = androidx.compose.runtime.mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         try {
+            // Initialize monotonic StableTime
+            com.example.util.StableTime.init()
+
             // Set the global app context for Retrofit intercepting wrapper
             com.example.api.FirebaseClient.appContext = applicationContext
 
@@ -81,22 +86,6 @@ class MainActivity : ComponentActivity() {
                 com.example.service.KeepAliveService.start(applicationContext)
             }
             
-            // Initialize local Room Database with destructive migration allowance to prevent upgrade crashes
-            database = AppDatabase.getInstance(applicationContext)
-            repository = LocalRepository(database)
-
-            // Check for previously exported backups on first start and auto-restore
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    val restored = com.example.util.DatabaseBackupHelper.autoRestoreIfNeeded(applicationContext, database)
-                    if (restored) {
-                        android.util.Log.i("MainActivity", "Successfully verified and auto-restored database from public storage.")
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "Auto-restore logic failed", e)
-                }
-            }
-
             // Request Notification Permission on Android 13+ (API 33)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                 val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -109,36 +98,63 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // ViewModel factory setup
-            viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
-                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
-                        @Suppress("UNCHECKED_CAST")
-                        return AppViewModel(application, repository) as T
-                    }
-                    throw IllegalArgumentException("Unknown ViewModel class")
-                }
-            })[AppViewModel::class.java]
-
-            // Initialize timer manager with context
-            FocusTimerManager.init(applicationContext)
-
-            // Track screen changes dynamically to trigger/hide floating overlay
+            // Initialize local Room Database with destructive migration allowance to prevent upgrade crashes
             lifecycleScope.launch {
-                lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                    viewModel.currentScreen.collect { screen ->
-                        FocusTimerManager.setTimerScreenActiveState(this@MainActivity, screen == Screen.TIMER)
+                try {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        database = AppDatabase.getInstance(applicationContext)
+                        repository = LocalRepository(database)
+
+                        // Check for previously exported backups on first start and auto-restore
+                        try {
+                            val restored = com.example.util.DatabaseBackupHelper.autoRestoreIfNeeded(applicationContext, database)
+                            if (restored) {
+                                android.util.Log.i("MainActivity", "Successfully verified and auto-restored database from public storage.")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "Auto-restore logic failed", e)
+                        }
                     }
+
+                    // ViewModel factory setup
+                    viewModel = ViewModelProvider(this@MainActivity, object : ViewModelProvider.Factory {
+                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                            if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
+                                @Suppress("UNCHECKED_CAST")
+                                return AppViewModel(application, repository) as T
+                            }
+                            throw IllegalArgumentException("Unknown ViewModel class")
+                        }
+                    })[AppViewModel::class.java]
+
+                    // Initialize timer manager with context
+                    FocusTimerManager.init(applicationContext)
+
+                    // Track screen changes dynamically to trigger/hide floating overlay
+                    lifecycleScope.launch {
+                        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                            viewModel.currentScreen.collect { screen ->
+                                FocusTimerManager.setTimerScreenActiveState(this@MainActivity, screen == Screen.TIMER)
+                            }
+                        }
+                    }
+
+                    // Handle auto-navigation if launched with SHOW_TIMER_PAGE parameter
+                    checkTimerNavigation(intent)
+                    checkAppBlockInterceptions(intent)
+                    handleDeepLink(intent)
+
+                    isDbReady.value = true
+                } catch (e: Throwable) {
+                    e.printStackTrace()
+                    startupException = e
+                    isDbReady.value = true
                 }
             }
-
-            // Handle auto-navigation if launched with SHOW_TIMER_PAGE parameter
-            checkTimerNavigation(intent)
-            checkAppBlockInterceptions(intent)
-            handleDeepLink(intent)
         } catch (e: Throwable) {
             e.printStackTrace()
             startupException = e
+            isDbReady.value = true
         }
 
         enableEdgeToEdge()
@@ -153,7 +169,7 @@ class MainActivity : ComponentActivity() {
                     mutableStateOf(
                         readyApkPath?.let { path ->
                             val file = java.io.File(path)
-                            file.exists() && file.length() > 0 && com.example.util.AppUpdateManager.isValidApk(file)
+                            file.exists() && file.length() > 0 && com.example.util.AppUpdateManager.isValidAndNewerApk(context, file)
                         } ?: false
                     )
                 }
@@ -254,6 +270,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val error = startupException
+                val dbReady by isDbReady
                 if (error != null) {
                     Box(
                         modifier = Modifier
@@ -323,17 +340,38 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                } else if (!dbReady) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF06070D)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(color = com.example.ui.theme.WaterBlue)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Initializing Database...",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 } else {
                     val isAppUnlocked by isAppUnlockedState
                     if (isAppUnlocked) {
-                        val currentScreen by viewModel.currentScreen.collectAsState()
-                    val activeNagTask by viewModel.activeNagTask.collectAsState()
-                    val isSidebarOpen by viewModel.isLocalSidebarOpen.collectAsState()
-                    val tabOrder by viewModel.tabOrder.collectAsState()
-                    val hiddenTabs by viewModel.hiddenTabs.collectAsState()
-                    val isTimerImmersive by viewModel.isTimerImmersive.collectAsState()
-                    val tabBarOrientation by viewModel.tabBarOrientation.collectAsState()
-                    val showHistoryScreen by viewModel.showHistoryScreen.collectAsState()
+                        val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
+                    val activeNagTask by viewModel.activeNagTask.collectAsStateWithLifecycle()
+                    val isSidebarOpen by viewModel.isLocalSidebarOpen.collectAsStateWithLifecycle()
+                    val tabOrder by viewModel.tabOrder.collectAsStateWithLifecycle()
+                    val hiddenTabs by viewModel.hiddenTabs.collectAsStateWithLifecycle()
+                    val isTimerImmersive by viewModel.isTimerImmersive.collectAsStateWithLifecycle()
+                    val tabBarOrientation by viewModel.tabBarOrientation.collectAsStateWithLifecycle()
+                    val showHistoryScreen by viewModel.showHistoryScreen.collectAsStateWithLifecycle()
                     val navItems = getNavigationItems(tabOrder.filterNot { hiddenTabs.contains(it) })
 
                     val keyboardController = LocalSoftwareKeyboardController.current
@@ -859,16 +897,16 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // Global Focus Session Saved & Verified Confirmation Overlay
-                val showGlobalVerification by FocusTimerManager.showGlobalVerificationDialog.collectAsState()
-                val globalFocusedSecs by FocusTimerManager.globalVerificationFocusedTimeSeconds.collectAsState()
-                val globalRevisedSecs by FocusTimerManager.globalVerificationRevisedTotalSeconds.collectAsState()
-                val verifiedStartMs by FocusTimerManager.verifiedSessionStartMs.collectAsState()
-                val verifiedPauseRanges by FocusTimerManager.verifiedSessionPauseRanges.collectAsState()
+                val showGlobalVerification by FocusTimerManager.showGlobalVerificationDialog.collectAsStateWithLifecycle()
+                val globalFocusedSecs by FocusTimerManager.globalVerificationFocusedTimeSeconds.collectAsStateWithLifecycle()
+                val globalRevisedSecs by FocusTimerManager.globalVerificationRevisedTotalSeconds.collectAsStateWithLifecycle()
+                val verifiedStartMs by FocusTimerManager.verifiedSessionStartMs.collectAsStateWithLifecycle()
+                val verifiedPauseRanges by FocusTimerManager.verifiedSessionPauseRanges.collectAsStateWithLifecycle()
 
                 if (showGlobalVerification) {
                     AlertDialog(
                         onDismissRequest = {
-                            FocusTimerManager.showGlobalVerificationDialog.value = false
+                            FocusTimerManager.setShowGlobalVerificationDialog(false)
                         },
                         title = {
                             Row(
@@ -1178,7 +1216,7 @@ class MainActivity : ComponentActivity() {
                         confirmButton = {
                             Button(
                                 onClick = {
-                                    FocusTimerManager.showGlobalVerificationDialog.value = false
+                                    FocusTimerManager.setShowGlobalVerificationDialog(false)
                                 },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color(0xFF4CAF50),

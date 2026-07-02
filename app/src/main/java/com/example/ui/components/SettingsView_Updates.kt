@@ -51,7 +51,7 @@ fun SettingsUpdatesPage(
     val readyApkPath = remember(updateStatus) { AppUpdateManager.getReadyApkPath(context) }
     val offlineApkFile = remember(readyApkPath) { readyApkPath?.let { java.io.File(it) } }
     val isOfflineApkReady = remember(offlineApkFile) { 
-        offlineApkFile != null && offlineApkFile.exists() && offlineApkFile.length() > 0 && AppUpdateManager.isValidApk(offlineApkFile)
+        offlineApkFile != null && offlineApkFile.exists() && offlineApkFile.length() > 0 && AppUpdateManager.isValidAndNewerApk(context, offlineApkFile)
     }
 
     val currentVersionCode = remember { AppUpdateManager.getCurrentVersionCode(context) }

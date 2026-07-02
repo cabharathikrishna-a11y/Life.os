@@ -194,7 +194,7 @@ fun LiveControlStopwatchBar(
                 Button(
                     onClick = {
                         viewModel.setTabFocusTimerSelected(false)
-                        viewModel.setSessionStartTimestamp(System.currentTimeMillis())
+                        viewModel.setSessionStartTimestamp(com.example.util.StableTime.currentTimeMillis())
                         viewModel.startStopwatch()
                         viewModel.setTimerImmersive(true)
                     },

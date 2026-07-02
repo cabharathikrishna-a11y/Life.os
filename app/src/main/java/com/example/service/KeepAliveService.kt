@@ -15,46 +15,75 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import android.widget.Toast
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
+import com.example.ui.FocusRecord
+import com.example.api.UserRemote
+import com.example.api.BellSignal
 
 class KeepAliveService : Service() {
 
     private val serviceJob = SupervisorJob()
-    private val serviceScope = CoroutineScope(Dispatchers.Default + serviceJob)
+    private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
+        Log.e("KeepAliveService", "Uncaught exception in background service scope: ${exception.message}", exception)
+    }
+    private val serviceScope = CoroutineScope(Dispatchers.Default + serviceJob + exceptionHandler)
     private var combinedMonitoringJob: Job? = null
     private var friendsFocusJob: Job? = null
     private var waterReminderJob: Job? = null
     private var databaseAlignmentCheckJob: Job? = null
-    private var appBlockerJob: Job? = null
     private var lastKnownForegroundPackage: String? = null
     private var wasUsingInstaOnBreak = false
     private val lastFocusStatusMap = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val latestFetchedPeerStates = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val debounceJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private var usersValueEventListener: ValueEventListener? = null
+    private var usersDatabaseReference: DatabaseReference? = null
+    private var bellsValueEventListener: ValueEventListener? = null
+    private var bellsDatabaseReference: DatabaseReference? = null
 
     override fun onCreate() {
         super.onCreate()
-        activeInstance = this
-        Log.d("KeepAliveService", "KeepAliveService created")
+        
+        // 1. INSTANTLY satisfy the Android OS requirement
+        createNotificationChannel()
+        val initialNotification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("LifeOS Active System")
+            .setContentText("Initializing unbreakable scheduler...")
+            .setSmallIcon(android.R.drawable.ic_menu_info_details)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+            
+        try {
+            startForeground(NOTIFICATION_ID, initialNotification)
+        } catch (e: Exception) {
+            Log.e("KeepAliveService", "Failed to start service in foreground in onCreate: ${e.message}", e)
+        }
+
+        // 2. NOW it is safe to do heavy initialization
+        com.example.util.StableTime.init()
         com.example.api.FirebaseClient.appContext = applicationContext
         com.example.util.FocusTimerManager.init(applicationContext)
         com.example.util.AppBlockHelper.initializeStrictAppsIfNeeded(applicationContext)
+        
         startCombinedMonitoring()
         startFriendsFocusMonitoring()
         startWaterReminderMonitoring()
         startHourlyDatabaseAlignmentCheck()
-        startAppBlockerMonitoring()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             // Guarantee that startForeground is called instantly using a safe, up-to-date notification
             createNotificationChannel()
-
-            // Instantly check friends focusing status
-            serviceScope.launch {
-                checkFriendsFocusStateAndNotify()
-            }
 
             val action = intent?.action
             Log.d("KeepAliveService", "KeepAliveService started with action: $action")
@@ -126,6 +155,33 @@ class KeepAliveService : Service() {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
+    }
+
+    private fun buildFallbackNotification(): Notification {
+        val launchIntent = Intent(this, com.example.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("SHOW_TIMER_PAGE", true)
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        } else {
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            9999,
+            launchIntent,
+            flags
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("LifeOS Active System")
+            .setContentText("Ensuring scheduler accuracy")
+            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
     }
 
     private fun getActionPendingIntent(action: String): android.app.PendingIntent {
@@ -294,6 +350,7 @@ class KeepAliveService : Service() {
     private fun startCombinedMonitoring() {
         if (combinedMonitoringJob != null) return
         combinedMonitoringJob = serviceScope.launch {
+            var lastCheckTime = android.os.SystemClock.elapsedRealtime()
             while (true) {
                 // Adaptive delay: 1 second if active timer or strict mode/monitored apps are present, 5 seconds if idle
                 val isTimerActive = FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value
@@ -303,6 +360,10 @@ class KeepAliveService : Service() {
 
                 val delayMs = if (isTimerActive || strictEnabled || monitoredAppsCount > 0) 1000L else 5000L
                 delay(delayMs)
+
+                val now = android.os.SystemClock.elapsedRealtime()
+                val actualElapsedMs = now - lastCheckTime
+                lastCheckTime = now
 
                 try {
                     val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
@@ -369,7 +430,7 @@ class KeepAliveService : Service() {
 
                             if (areLimitsActive) {
                                 // 1. Increment active usage counter by actual elapsed seconds (e.g. 1s or 5s)
-                                val incrementSecs = (delayMs / 1000).toInt()
+                                val incrementSecs = (actualElapsedMs / 1000).toInt()
                                 if (incrementSecs > 0) {
                                     com.example.util.AppBlockHelper.incrementDailyUsageSeconds(applicationContext, foregroundPackage, incrementSecs)
                                 }
@@ -458,18 +519,80 @@ class KeepAliveService : Service() {
 
     private fun startFriendsFocusMonitoring() {
         if (friendsFocusJob != null) return
+
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val isLoggedIn = prefs.getBoolean("is_logged_in", false)
+        val currentUsername = prefs.getString("current_username", null)
+
+        if (isLoggedIn && currentUsername != null) {
+            try {
+                // 1. Get the list of friends we care about
+                val myFriendsList = listOf("subash", "madhavan", "maddy", "shalini")
+                
+                // 2. Tell the Firebase WebSocket to listen to them
+                com.example.api.FirebaseSyncManager.listenToFriends(applicationContext, myFriendsList)
+                
+                // 3. Observe the flow safely for UI updates and notifications
+                serviceScope.launch {
+                    com.example.api.FirebaseSyncManager.friendsLiveStatus.collect { liveFriendsMap ->
+                        com.example.api.FirebaseRepository.updateUsers(liveFriendsMap)
+                        processFriendsFocusStateAndNotify(liveFriendsMap)
+                    }
+                }
+
+                // 4. Setup real-time listener on "/bells/{currentUsername}"
+                val url = com.example.api.FirebaseConfig.getDatabaseUrl(applicationContext)
+                val database = FirebaseDatabase.getInstance(url)
+                val bellsRef = database.getReference("bells").child(currentUsername)
+                bellsDatabaseReference = bellsRef
+                val bellsListener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        serviceScope.launch(Dispatchers.Default) {
+                            try {
+                                if (snapshot.exists()) {
+                                    val senderUsername = snapshot.child("senderUsername").getValue(String::class.java) ?: ""
+                                    val senderDisplayName = snapshot.child("senderDisplayName").getValue(String::class.java) ?: ""
+                                    val timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: 0L
+                                    val isProcessed = snapshot.child("isProcessed").getValue(Boolean::class.java) ?: false
+
+                                    val signal = BellSignal(
+                                        senderUsername = senderUsername,
+                                        senderDisplayName = senderDisplayName,
+                                        timestamp = timestamp,
+                                        isProcessed = isProcessed
+                                    )
+
+                                    processBellSignal(signal, currentUsername)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("KeepAliveService", "Failed to process real-time bell update snapshot: ${e.message}", e)
+                            }
+                        }
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        Log.w("KeepAliveService", "Real-time bell listener cancelled: ${error.message}")
+                    }
+                }
+                bellsRef.addValueEventListener(bellsListener)
+                bellsValueEventListener = bellsListener
+                Log.d("KeepAliveService", "Registered Real-time Firebase Database listener for reminder bells.")
+
+            } catch (e: Exception) {
+                Log.e("KeepAliveService", "Error configuring Real-time Firebase listeners: ${e.message}", e)
+            }
+        }
+
+        // Keep a non-aggressive background sync loop for inactivity notifications and database alignments
         friendsFocusJob = serviceScope.launch {
             while (true) {
-                checkFriendsFocusStateAndNotify()
                 checkInactivityAndNotify()
                 try {
-                    // Commented out high-frequency background log write to prevent RAM/DB bloat on low-RAM devices
-                    // com.example.util.FocusTimerManager.addSystemLog(applicationContext, "Background Daemon KeepAlive Pulse", "SYSTEM", "Triggering periodic state sync to ensure 100% alignment")
                     com.example.util.FocusTimerManager.syncStateToFirebase(applicationContext)
                 } catch (e: Exception) {
                     Log.e("KeepAliveService", "Background periodic syncStateToFirebase failed: ${e.message}", e)
                 }
-                delay(45000) // Poll every 45 seconds to drastically reduce background Firebase traffic
+                delay(60000) // Poll sync every 60 seconds (no REST users querying!)
             }
         }
     }
@@ -548,7 +671,7 @@ class KeepAliveService : Service() {
         val pendingIntent = android.app.PendingIntent.getActivity(this, 10010, launchIntent, flags)
         
         val messages = listOf(
-            "It's been 6 hours since your last session. Let's start studying and make some progress! üìö",
+            "It's been 6 hours since your last session. Let's start studying and make some progress! Ì†ΩÌ≥ö",
             "Ready to unlock your full potential? Click here to start your focus timer! üéØ",
             "A small step today leads to big achievements tomorrow. Let's do a quick focus session! üöÄ",
             "Consistency is key! You haven't focused in a while. Let's study together now! üë®‚Äçüíª",
@@ -571,7 +694,7 @@ class KeepAliveService : Service() {
         notificationManager.notify(10010, notification)
     }
 
-    private suspend fun checkFriendsFocusStateAndNotify() {
+    private fun processFriendsFocusStateAndNotify(users: Map<String, UserRemote>) {
         try {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val friendsChannelId = "friends_focus_channel"
@@ -595,211 +718,233 @@ class KeepAliveService : Service() {
             val currentUsername = prefs.getString("current_username", null)
             
             if (isLoggedIn && currentUsername != null) {
-                // Check if any friend has rung a focus reminder bell for us
-                try {
-                    val responseSignal = com.example.api.FirebaseClient.api.getBellSignal(currentUsername)
-                    val signal = if (responseSignal.isSuccessful) responseSignal.body() else null
-                    if (signal != null && !signal.isProcessed && signal.senderUsername != currentUsername) {
-                        val lastTimestamp = prefs.getLong("last_processed_bell_timestamp", 0L)
-                        if (signal.timestamp > lastTimestamp) {
-                            val isSilent = com.example.util.FocusTimerManager.isBellSilentModeEnabled.value
-                            val isFocusing = (com.example.util.FocusTimerManager.isTimerRunning.value || com.example.util.FocusTimerManager.isStopwatchActive.value) && com.example.util.FocusTimerManager.isFocusPhase.value
+                val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
 
-                            if (!isSilent && !isFocusing) {
-                                val bellChannelId = "friends_bell_channel"
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    val bellChannel = NotificationChannel(
-                                        bellChannelId,
-                                        "Friend Bell Reminders",
-                                        NotificationManager.IMPORTANCE_HIGH
-                                    ).apply {
-                                        description = "Plays alert when friends ring your focus bell"
-                                        enableLights(true)
-                                        enableVibration(true)
-                                    }
-                                    notificationManager.createNotificationChannel(bellChannel)
-                                }
+                // Check for focus transitions and trigger sound alert if we are NOT focusing with 30s debounce
+                users.forEach { (username, peer) ->
+                    if (username != currentUsername && 
+                        username != "admin"
+                    ) {
+                        val isPeerNowFocusing = peer.isFocusing == true
+                        latestFetchedPeerStates[username] = isPeerNowFocusing
+                        
+                        val wasPeerFocusing = lastFocusStatusMap[username] == true
+                        val hasKey = lastFocusStatusMap.containsKey(username)
 
-                                // Trigger corresponding 5-second vibration and tone generator bell alert
-                                com.example.util.FocusTimerManager.playFriendReminderBellSound(this)
-
-                                val bellPendingIntent = android.app.PendingIntent.getActivity(
-                                    this,
-                                    9995,
-                                    Intent(this, com.example.MainActivity::class.java).apply {
-                                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                        putExtra("SHOW_TIMER_PAGE", true)
-                                    },
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                        android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                                    } else {
-                                        android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                                    }
-                                )
-
-                                val senderName = cleanName(if (!signal.senderDisplayName.isNullOrEmpty()) signal.senderDisplayName else signal.senderUsername)
-                                val bellNotificationId = 10003 // sleep time check active
-                                val bellBuilder = NotificationCompat.Builder(this, bellChannelId)
-                                    .setContentTitle("Session Reminder!")
-                                    .setContentText("$senderName rang the bell to remind you to start your timer!")
-                                    .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
-                                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                                    .setCategory(NotificationCompat.CATEGORY_ALARM)
-                                    .setContentIntent(bellPendingIntent)
-                                    .setAutoCancel(true)
-
-                                if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) { notificationManager.notify(bellNotificationId, bellBuilder.build()) } else { Log.i("KeepAliveService", "Muting bell signal notification during sleep hours.") }
-                            }
-
-                            // Mark as processed locally and update state on Firebase to prevent repeating
-                            prefs.edit().putLong("last_processed_bell_timestamp", signal.timestamp).apply()
-                            
-                            try {
-                                com.example.api.FirebaseClient.api.putBellSignal(currentUsername, signal.copy(isProcessed = true))
-                            } catch (writeErr: Exception) {
-                                Log.e("KeepAliveService", "Failed to mark Firebase bell signal processed: ${writeErr.message}")
-                            }
-                        }
-                    }
-                } catch (bellErr: Exception) {
-                    Log.e("KeepAliveService", "Failed checking focus reminder bell: ${bellErr.message}")
-                }
-
-                val responseUsers = com.example.api.FirebaseClient.api.getUsers()
-                val users = if (responseUsers.isSuccessful) responseUsers.body() else null
-                if (users != null) {
-                    val isLocalFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
-
-                    // Check for focus transitions and trigger sound alert if we are NOT focusing
-                    users.forEach { (username, peer) ->
-                        if (username != currentUsername && 
-                            username != "admin"
-                        ) {
-                            val isPeerNowFocusing = peer.isFocusing == true
-                            val wasPeerFocusing = lastFocusStatusMap[username] == true
-                            val hasKey = lastFocusStatusMap.containsKey(username)
-
-                            if (hasKey && isPeerNowFocusing && !wasPeerFocusing && !isLocalFocusing) {
-                                val peerName = cleanName(peer.nickname ?: peer.name ?: username)
-                                val peerEmoji = peer.emoji ?: "üéØ"
-                                val taskText = peer.currentTaskTitle?.let { " on: $it" } ?: ""
-
-                                val alertChannelId = "peer_started_focus_channel"
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    val alertChannel = NotificationChannel(
-                                        alertChannelId,
-                                        "Friends Focus Alerts",
-                                        NotificationManager.IMPORTANCE_HIGH
-                                    ).apply {
-                                        description = "Plays alert with sound when a friend starts focusing"
-                                        enableLights(true)
-                                        enableVibration(true)
-                                    }
-                                    notificationManager.createNotificationChannel(alertChannel)
-                                }
-
-                                val alertPendingIntent = android.app.PendingIntent.getActivity(
-                                    this,
-                                    20000 + username.hashCode(),
-                                    Intent(this, com.example.MainActivity::class.java).apply {
-                                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                        putExtra("SHOW_TIMER_PAGE", true)
-                                    },
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                        android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                                    } else {
-                                        android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                                    }
-                                )
-
-                                val alertBuilder = NotificationCompat.Builder(this, alertChannelId)
-                                    .setContentTitle("$peerName started focusing!")
-                                    .setContentText("$peerName has started a focusing session$taskText. Join them and complete your goals!")
-                                    .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
-                                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                                    .setCategory(NotificationCompat.CATEGORY_ALARM)
-                                    .setDefaults(NotificationCompat.DEFAULT_ALL)
-                                    .setContentIntent(alertPendingIntent)
-                                    .setAutoCancel(true)
-
-                                if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) { notificationManager.notify(20000 + username.hashCode(), alertBuilder.build()) } else { Log.i("KeepAliveService", "Muting alert notification during sleep hours.") }
-                            }
-
+                        if (!hasKey) {
+                            // First time populating, just store current status, don't trigger notification
                             lastFocusStatusMap[username] = isPeerNowFocusing
-                        }
-                    }
+                        } else if (isPeerNowFocusing != wasPeerFocusing) {
+                            // Peer status changed! Start debounce job
+                            val jobKey = username
+                            val existingJob = debounceJobs[jobKey]
+                            if (existingJob == null || !existingJob.isActive) {
+                                debounceJobs[jobKey] = serviceScope.launch {
+                                    kotlinx.coroutines.delay(30000L) // Debounce delay 30 seconds
+                                    val currentFirebaseState = latestFetchedPeerStates[username] ?: isPeerNowFocusing
+                                    if (currentFirebaseState == isPeerNowFocusing) {
+                                        // The status has remained changed for at least 30 seconds! Update map and trigger notification.
+                                        lastFocusStatusMap[username] = isPeerNowFocusing
+                                        if (isPeerNowFocusing && !isLocalFocusing) {
+                                            val peerName = cleanName(peer.nickname ?: peer.name ?: username)
+                                            val peerEmoji = peer.emoji ?: "üéØ"
+                                            val taskText = peer.currentTaskTitle?.let { " on: $it" } ?: ""
 
-                    val focusingPeers = users.filter { (username, user) ->
-                        username != currentUsername && 
-                        username != "admin" && 
-                        user.isFocusing == true
-                    }.values.toList()
-                    
-                    if (focusingPeers.isNotEmpty()) {
-                        val pendingIntent = android.app.PendingIntent.getActivity(
-                            this,
-                            9998,
-                            Intent(this, com.example.MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                putExtra("SHOW_TIMER_PAGE", true)
-                            },
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                            } else {
-                                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                                            val alertChannelId = "peer_started_focus_channel"
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                                val alertChannel = NotificationChannel(
+                                                    alertChannelId,
+                                                    "Friends Focus Alerts",
+                                                    NotificationManager.IMPORTANCE_HIGH
+                                                ).apply {
+                                                    description = "Plays alert with sound when a friend starts focusing"
+                                                    enableLights(true)
+                                                    enableVibration(true)
+                                                }
+                                                notificationManager.createNotificationChannel(alertChannel)
+                                            }
+
+                                            val alertPendingIntent = android.app.PendingIntent.getActivity(
+                                                this@KeepAliveService,
+                                                20000 + username.hashCode(),
+                                                Intent(this@KeepAliveService, com.example.MainActivity::class.java).apply {
+                                                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                                                    putExtra("SHOW_TIMER_PAGE", true)
+                                                },
+                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                                                } else {
+                                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                                                }
+                                            )
+
+                                            val alertBuilder = NotificationCompat.Builder(this@KeepAliveService, alertChannelId)
+                                                .setContentTitle("$peerName started focusing!")
+                                                .setContentText("$peerName has started a focusing session$taskText. Join them and complete your goals!")
+                                                .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+                                                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                                                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                                                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                                                .setContentIntent(alertPendingIntent)
+                                                .setAutoCancel(true)
+
+                                            if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) {
+                                                notificationManager.notify(20000 + username.hashCode(), alertBuilder.build())
+                                            } else {
+                                                Log.i("KeepAliveService", "Muting alert notification during sleep hours.")
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                        )
-                        
-                        val title = if (focusingPeers.size == 1) {
-                            val peer = focusingPeers.first()
-                            val name = cleanName(peer.name ?: peer.nickname ?: "A friend")
-                            "$name is focusing!"
                         } else {
-                            "Friends are Focusing Live!"
+                            // If they are back to/at their cached state, cancel any active debounce job for this user
+                            debounceJobs[username]?.cancel()
                         }
-                        
-                        val desc = focusingPeers.joinToString(separator = "\n") { peer ->
-                            val name = cleanName(peer.name ?: peer.nickname ?: "Friend")
-                            val task = peer.currentTaskTitle?.let { " - $it" } ?: ""
-                            "$name$task"
-                        }
-                        
-                        val builder = NotificationCompat.Builder(this, friendsChannelId)
-                            .setContentTitle(title)
-                            .setContentText(desc)
-                            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
-                            .setPriority(NotificationCompat.PRIORITY_LOW)
-                            .setCategory(NotificationCompat.CATEGORY_STATUS)
-                            .setContentIntent(pendingIntent)
-                            .setOngoing(true)
-                            .setOnlyAlertOnce(true)
-                        
-                        if (focusingPeers.size > 1) {
-                            builder.setStyle(NotificationCompat.BigTextStyle().bigText(desc))
-                        }
-                        
-                        notificationManager.notify(friendsNotificationId, builder.build())
+                    }
+                }
 
-                        // Update the widget
-                        val widgetDesc = focusingPeers.joinToString(separator = "   ") { peer ->
-                            val emoji = peer.emoji ?: "üéØ"
-                            val name = peer.name ?: peer.nickname ?: "Friend"
-                            "$emoji $name"
+                val focusingPeers = users.filter { (username, user) ->
+                    username != currentUsername && 
+                    username != "admin" && 
+                    user.isFocusing == true
+                }.values.toList()
+                
+                if (focusingPeers.isNotEmpty()) {
+                    val pendingIntent = android.app.PendingIntent.getActivity(
+                        this,
+                        9998,
+                        Intent(this, com.example.MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            putExtra("SHOW_TIMER_PAGE", true)
+                        },
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        } else {
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT
                         }
-                        com.example.widget.WidgetUpdater.updateFriendsFocusWidget(applicationContext, widgetDesc)
+                    )
+                    
+                    val title = if (focusingPeers.size == 1) {
+                        val peer = focusingPeers.first()
+                        val name = cleanName(peer.name ?: peer.nickname ?: "A friend")
+                        "$name is focusing!"
                     } else {
-                        notificationManager.cancel(friendsNotificationId)
-                        com.example.widget.WidgetUpdater.updateFriendsFocusWidget(applicationContext, "No one is focusing")
+                        "Friends are Focusing Live!"
                     }
                     
-                    checkRankChangesAndNotify(users, currentUsername)
+                    val desc = focusingPeers.joinToString(separator = "\n") { peer ->
+                        val name = cleanName(peer.name ?: peer.nickname ?: "Friend")
+                        val task = peer.currentTaskTitle?.let { " - $it" } ?: ""
+                        "$name$task"
+                    }
+                    
+                    val builder = NotificationCompat.Builder(this, friendsChannelId)
+                        .setContentTitle(title)
+                        .setContentText(desc)
+                        .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+                        .setPriority(NotificationCompat.PRIORITY_LOW)
+                        .setCategory(NotificationCompat.CATEGORY_STATUS)
+                        .setContentIntent(pendingIntent)
+                        .setOngoing(true)
+                        .setOnlyAlertOnce(true)
+                    
+                    if (focusingPeers.size > 1) {
+                        builder.setStyle(NotificationCompat.BigTextStyle().bigText(desc))
+                    }
+                    
+                    notificationManager.notify(friendsNotificationId, builder.build())
+
+                    // Update the widget
+                    val widgetDesc = focusingPeers.joinToString(separator = "   ") { peer ->
+                        val emoji = peer.emoji ?: "üéØ"
+                        val name = peer.name ?: peer.nickname ?: "Friend"
+                        "$emoji $name"
+                    }
+                    com.example.widget.WidgetUpdater.updateFriendsFocusWidget(applicationContext, widgetDesc)
+                } else {
+                    notificationManager.cancel(friendsNotificationId)
+                    com.example.widget.WidgetUpdater.updateFriendsFocusWidget(applicationContext, "No one is focusing")
                 }
+                
+                checkRankChangesAndNotify(users, currentUsername)
             } else {
                 notificationManager.cancel(friendsNotificationId)
                 com.example.widget.WidgetUpdater.updateFriendsFocusWidget(applicationContext, "No one is focusing")
             }
         } catch (e: Exception) {
-            Log.e("KeepAliveService", "Failed to check friends focus status: ${e.message}", e)
+            Log.e("KeepAliveService", "Failed to process real-time friends focus status: ${e.message}", e)
+        }
+    }
+
+    private suspend fun processBellSignal(signal: BellSignal, currentUsername: String) {
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        if (!signal.isProcessed && signal.senderUsername != currentUsername) {
+            val lastTimestamp = prefs.getLong("last_processed_bell_timestamp", 0L)
+            if (signal.timestamp > lastTimestamp) {
+                val isSilent = FocusTimerManager.isBellSilentModeEnabled.value
+                val isFocusing = (FocusTimerManager.isTimerRunning.value || FocusTimerManager.isStopwatchActive.value) && FocusTimerManager.isFocusPhase.value
+
+                if (!isSilent && !isFocusing) {
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    val bellChannelId = "friends_bell_channel"
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val bellChannel = NotificationChannel(
+                            bellChannelId,
+                            "Friend Bell Reminders",
+                            NotificationManager.IMPORTANCE_HIGH
+                        ).apply {
+                            description = "Plays alert when friends ring your focus bell"
+                            enableLights(true)
+                            enableVibration(true)
+                        }
+                        notificationManager.createNotificationChannel(bellChannel)
+                    }
+
+                    // Trigger corresponding 5-second vibration and tone generator bell alert
+                    FocusTimerManager.playFriendReminderBellSound(this@KeepAliveService)
+
+                    val bellPendingIntent = android.app.PendingIntent.getActivity(
+                        this@KeepAliveService,
+                        9995,
+                        Intent(this@KeepAliveService, com.example.MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            putExtra("SHOW_TIMER_PAGE", true)
+                        },
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        } else {
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        }
+                    )
+
+                    val senderName = cleanName(if (!signal.senderDisplayName.isNullOrEmpty()) signal.senderDisplayName else signal.senderUsername)
+                    val bellNotificationId = 10003
+                    val bellBuilder = NotificationCompat.Builder(this@KeepAliveService, bellChannelId)
+                        .setContentTitle("Session Reminder!")
+                        .setContentText("$senderName rang the bell to remind you to start your timer!")
+                        .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setCategory(NotificationCompat.CATEGORY_ALARM)
+                        .setContentIntent(bellPendingIntent)
+                        .setAutoCancel(true)
+
+                    if (!com.example.util.SleepTimeHelper.isInSleepTime(applicationContext)) {
+                        notificationManager.notify(bellNotificationId, bellBuilder.build())
+                    } else {
+                        Log.i("KeepAliveService", "Muting bell signal notification during sleep hours.")
+                    }
+                }
+
+                // Mark as processed locally and update state on Firebase to prevent repeating
+                prefs.edit().putLong("last_processed_bell_timestamp", signal.timestamp).apply()
+                
+                try {
+                    com.example.api.FirebaseClient.api.putBellSignal(currentUsername, signal.copy(isProcessed = true))
+                } catch (writeErr: Exception) {
+                    Log.e("KeepAliveService", "Failed to mark Firebase bell signal processed: ${writeErr.message}")
+                }
+            }
         }
     }
 
@@ -1103,24 +1248,18 @@ class KeepAliveService : Service() {
         return clean
     }
 
-    private fun startAppBlockerMonitoring() {
-        if (appBlockerJob != null) return
-        appBlockerJob = serviceScope.launch {
-            while (true) {
-                try {
-                    delay(1500)
-                    com.example.util.AppBlockHelper.checkForegroundAppAndBlockIfNeeded(applicationContext)
-                } catch (e: Exception) {
-                    Log.e("KeepAliveService", "Error in app blocker polling loop", e)
-                }
-            }
-        }
-    }
-
     override fun onDestroy() {
         Log.d("KeepAliveService", "KeepAliveService destroyed")
-        if (activeInstance == this) {
-            activeInstance = null
+        try {
+            com.example.api.FirebaseSyncManager.stopListening(applicationContext)
+            usersValueEventListener?.let {
+                usersDatabaseReference?.removeEventListener(it)
+            }
+            bellsValueEventListener?.let {
+                bellsDatabaseReference?.removeEventListener(it)
+            }
+        } catch (e: Exception) {
+            Log.e("KeepAliveService", "Error removing Firebase listeners in onDestroy: ${e.message}")
         }
         serviceJob.cancel()
         super.onDestroy()
@@ -1129,9 +1268,6 @@ class KeepAliveService : Service() {
     companion object {
         const val CHANNEL_ID = "lifeos_keepalive_service_channel"
         const val NOTIFICATION_ID = 10001
-
-        @Volatile
-        var activeInstance: KeepAliveService? = null
 
         const val ACTION_PAUSE_TIMER = "com.example.service.ACTION_PAUSE_TIMER"
         const val ACTION_RESUME_TIMER = "com.example.service.ACTION_RESUME_TIMER"
@@ -1142,17 +1278,6 @@ class KeepAliveService : Service() {
         const val ACTION_RESET_STOPWATCH = "com.example.service.ACTION_RESET_STOPWATCH"
         
         fun start(context: Context) {
-            val active = activeInstance
-            if (active != null) {
-                active.updateNotificationDirectly()
-                return
-            }
-
-            if (FocusTimerManager.appIsBackgrounded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                Log.w("KeepAliveService", "App is backgrounded, skipping startForegroundService on Android 12+")
-                return
-            }
-
             try {
                 val intent = Intent(context.applicationContext, KeepAliveService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1172,17 +1297,6 @@ class KeepAliveService : Service() {
                 val isTimerOn = FocusTimerManager.isTimerRunning.value
                 val isStopwatchOn = FocusTimerManager.isStopwatchActive.value
                 if (!prefs.getBoolean("keep_notification_enabled", true) && !isTimerOn && !isStopwatchOn) {
-                    return
-                }
-
-                val active = activeInstance
-                if (active != null) {
-                    active.updateNotificationDirectly()
-                    return
-                }
-
-                if (FocusTimerManager.appIsBackgrounded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    Log.w("KeepAliveService", "App is backgrounded, skipping startForegroundService on Android 12+ (updateNotification)")
                     return
                 }
 

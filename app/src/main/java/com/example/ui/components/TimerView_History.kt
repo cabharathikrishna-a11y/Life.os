@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,7 +36,7 @@ fun TimerHistoryView(
     modifier: Modifier = Modifier
 ) {
     // State for editing focus session logs
-    var editingLogIndex by remember { mutableStateOf<Int?>(null) }
+    var editingLogId by remember { mutableStateOf<String?>(null) }
     var showEditLogDialog by remember { mutableStateOf(false) }
 
     var editTaskTitle by remember { mutableStateOf("") }
@@ -48,18 +49,18 @@ fun TimerHistoryView(
 
     // SEPARATE OVERVIEW AND FOCUS HISTORY PAGE
     var historySubTab by remember { mutableStateOf(0) } // 0 = Focus History, 1 = System Audit Logs
-    val auditLogs by FocusTimerManager.systemLogs.collectAsState()
+    val auditLogs by FocusTimerManager.systemLogs.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    val focusRecords by viewModel.focusRecords.collectAsState()
-    val isFocusPhase by viewModel.isFocusPhase.collectAsState()
-    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsState()
-    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsState()
-    val pendingFocusReview by viewModel.pendingFocusReview.collectAsState()
-    val totalFocusMinutes by viewModel.totalFocusMinutes.collectAsState()
-    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsState()
-    val isTimerActive by viewModel.isTimerRunning.collectAsState()
-    val isStopwatchActive by viewModel.isStopwatchActive.collectAsState()
+    val focusRecords by viewModel.focusRecords.collectAsStateWithLifecycle()
+    val isFocusPhase by viewModel.isFocusPhase.collectAsStateWithLifecycle()
+    val cumulativeSessionFocusSeconds by viewModel.cumulativeSessionFocusSeconds.collectAsStateWithLifecycle()
+    val stopwatchSeconds by viewModel.stopwatchSeconds.collectAsStateWithLifecycle()
+    val pendingFocusReview by viewModel.pendingFocusReview.collectAsStateWithLifecycle()
+    val totalFocusMinutes by viewModel.totalFocusMinutes.collectAsStateWithLifecycle()
+    val sessionStartTimestamp by viewModel.sessionStartTimestamp.collectAsStateWithLifecycle()
+    val isTimerActive by viewModel.isTimerRunning.collectAsStateWithLifecycle()
+    val isStopwatchActive by viewModel.isStopwatchActive.collectAsStateWithLifecycle()
 
     val WaterBlue = Color(0xFF38BDF8)
 
@@ -228,7 +229,7 @@ fun TimerHistoryView(
             DailyFocusTimelineChrono(focusRecords = focusRecords, selectedDateStr = selectedDateStr)
 
             val localLiveAddedSeconds = remember(isFocusPhase, cumulativeSessionFocusSeconds, stopwatchSeconds, pendingFocusReview) {
-                val running = if (isFocusPhase) {
+                val running = if (isFocusPhase && pendingFocusReview == null) {
                     (cumulativeSessionFocusSeconds + stopwatchSeconds)
                 } else 0
                 val pending = pendingFocusReview?.durationSeconds ?: ((pendingFocusReview?.durationMinutes ?: 0) * 60)
@@ -244,10 +245,16 @@ fun TimerHistoryView(
                 liveAddedSeconds = localLiveAddedSeconds
             )
 
-            val myTodaySeconds = remember(focusRecords, selectedDateStr, isFocusPhase, sessionStartTimestamp, pendingFocusReview, isTimerActive, isStopwatchActive) {
-                val completedSecs = focusRecords.sumOf { FocusTimerManager.getOverlapSecondsForDate(it, selectedDateStr) }
-                val pendingSecs = pendingFocusReview?.let { FocusTimerManager.getOverlapSecondsForDate(it, selectedDateStr) } ?: 0
-                val activeSecs = if (isFocusPhase) {
+            val completedSecs = remember(focusRecords, selectedDateStr) {
+                focusRecords.sumOf { FocusTimerManager.getOverlapSecondsForDate(it, selectedDateStr) }
+            }
+
+            val pendingSecs = remember(pendingFocusReview, selectedDateStr) {
+                pendingFocusReview?.let { FocusTimerManager.getOverlapSecondsForDate(it, selectedDateStr) } ?: 0
+            }
+
+            val myTodaySeconds = remember(completedSecs, pendingSecs, selectedDateStr, isFocusPhase, sessionStartTimestamp, pendingFocusReview, isTimerActive, isStopwatchActive) {
+                val activeSecs = if (isFocusPhase && pendingFocusReview == null) {
                     if ((isTimerActive || isStopwatchActive) && sessionStartTimestamp != null) {
                         FocusTimerManager.getActiveSessionOverlapSeconds(sessionStartTimestamp!!, selectedDateStr)
                     } else {
@@ -364,7 +371,7 @@ fun TimerHistoryView(
                                 // Pencil edit icon
                                 IconButton(
                                     onClick = {
-                                        editingLogIndex = index
+                                        editingLogId = record.id
                                         editTaskTitle = record.taskTitle
                                         editStartTime = record.startTime
                                         editEndTime = record.endTime
@@ -392,7 +399,7 @@ fun TimerHistoryView(
     }
 
     // Dialog to Edit Focus Session Details
-    if (showEditLogDialog && editingLogIndex != null) {
+    if (showEditLogDialog && editingLogId != null) {
         AlertDialog(
             onDismissRequest = { showEditLogDialog = false },
             title = {
@@ -554,9 +561,10 @@ fun TimerHistoryView(
                             dateString = editDateString.trim(),
                             notes = editNotes.trim(),
                             durationSeconds = minsParsed * 60,
-                            tag = editTag.trim()
+                            tag = editTag.trim(),
+                            id = editingLogId!!
                         )
-                        viewModel.updateFocusRecord(editingLogIndex!!, updated)
+                        viewModel.updateFocusRecordById(editingLogId!!, updated)
                         showEditLogDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = WaterBlue, contentColor = Color.Black)
@@ -568,7 +576,7 @@ fun TimerHistoryView(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            viewModel.deleteFocusRecord(editingLogIndex!!)
+                            viewModel.deleteFocusRecordById(editingLogId!!)
                             showEditLogDialog = false
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White)
