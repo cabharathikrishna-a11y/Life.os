@@ -77,12 +77,12 @@ object GoogleContactsSyncManager {
             val googleIdToConnection = googleContacts.associateBy { it.resourceName }
 
             for (gContact in googleContacts) {
-                // Try to find matching local contact by googleContactId or fallback to names/phone
+                // Try to find matching local contact by googleContactId or fallback to names
                 val matchedLocal = localContacts.find { it.googleContactId == gContact.resourceName }
                     ?: localContacts.find { 
-                        (it.firstName.lowercase().trim() == gContact.firstName.lowercase().trim() &&
-                         it.lastName.lowercase().trim() == gContact.lastName.lowercase().trim()) ||
-                         (it.phone.isNotEmpty() && gContact.phone.isNotEmpty() && sanitizePhone(it.phone) == sanitizePhone(gContact.phone))
+                        gContact.firstName.isNotEmpty() &&
+                        it.firstName.lowercase().trim() == gContact.firstName.lowercase().trim() &&
+                        it.lastName.lowercase().trim() == gContact.lastName.lowercase().trim()
                     }
 
                 if (matchedLocal != null) {
@@ -91,29 +91,27 @@ object GoogleContactsSyncManager {
                         firstName = if (gContact.firstName.isNotEmpty()) gContact.firstName else matchedLocal.firstName,
                         middleName = if (gContact.middleName.isNotEmpty()) gContact.middleName else matchedLocal.middleName,
                         lastName = if (gContact.lastName.isNotEmpty()) gContact.lastName else matchedLocal.lastName,
-                        phone = if (gContact.phone.isNotEmpty()) gContact.phone else matchedLocal.phone,
                         dobString = if (gContact.dobString.isNotEmpty()) gContact.dobString else matchedLocal.dobString,
                         photoUri = if (!gContact.photoUrl.isNullOrEmpty()) gContact.photoUrl else matchedLocal.photoUri,
-                        email = if (gContact.email.isNotEmpty()) gContact.email else matchedLocal.email,
-                        address = if (gContact.address.isNotEmpty()) gContact.address else matchedLocal.address,
-                        jobTitle = if (gContact.jobTitle.isNotEmpty()) gContact.jobTitle else matchedLocal.jobTitle,
                         anniversaryString = if (gContact.anniversaryString.isNotEmpty()) gContact.anniversaryString else matchedLocal.anniversaryString,
+                        additionalDatesJson = if (gContact.additionalDatesJson.isNotEmpty()) gContact.additionalDatesJson else matchedLocal.additionalDatesJson,
                         googleContactId = gContact.resourceName
                     )
                     contactDao.updateContact(updated)
                 } else {
-                    // Create new local contact
+                    // Create new local contact (name, dob, profile pic, and any other dates mentioned ONLY)
                     val newContact = Contact(
                         firstName = gContact.firstName,
                         middleName = gContact.middleName,
                         lastName = gContact.lastName,
-                        phone = gContact.phone,
+                        phone = "",
                         dobString = gContact.dobString,
                         photoUri = gContact.photoUrl,
-                        email = gContact.email,
-                        address = gContact.address,
-                        jobTitle = gContact.jobTitle,
+                        email = "",
+                        address = "",
+                        jobTitle = "",
                         anniversaryString = gContact.anniversaryString,
+                        additionalDatesJson = gContact.additionalDatesJson,
                         googleContactId = gContact.resourceName
                     )
                     contactDao.insertContact(newContact)
@@ -134,12 +132,9 @@ object GoogleContactsSyncManager {
                         if (local.firstName != gContact.firstName ||
                             local.middleName != gContact.middleName ||
                             local.lastName != gContact.lastName ||
-                            local.phone != gContact.phone ||
                             local.dobString != gContact.dobString ||
-                            local.email != gContact.email ||
-                            local.address != gContact.address ||
-                            local.jobTitle != gContact.jobTitle ||
-                            local.anniversaryString != gContact.anniversaryString
+                            local.anniversaryString != gContact.anniversaryString ||
+                            local.additionalDatesJson != gContact.additionalDatesJson
                         ) {
                             updateGoogleContact(token, local)
                         }
@@ -185,7 +180,8 @@ object GoogleContactsSyncManager {
         val email: String,
         val address: String,
         val jobTitle: String,
-        val anniversaryString: String
+        val anniversaryString: String,
+        val additionalDatesJson: String
     )
 
     private suspend fun fetchGoogleConnections(token: String): List<GoogleContactDetails> {
@@ -204,6 +200,7 @@ object GoogleContactsSyncManager {
                 return emptyList()
             }
             val bodyStr = response.body?.string() ?: ""
+            Log.d(TAG, "fetchGoogleConnections Response JSON: $bodyStr")
             val json = JSONObject(bodyStr)
             val connections = json.optJSONArray("connections") ?: return emptyList()
 
@@ -212,18 +209,6 @@ object GoogleContactsSyncManager {
                 val resourceName = conn.optString("resourceName")
                 val etag = conn.optString("etag")
 
-                // 1. Name parsing
-                var firstName = ""
-                var lastName = ""
-                var middleName = ""
-                val names = conn.optJSONArray("names")
-                if (names != null && names.length() > 0) {
-                    val nameObj = names.getJSONObject(0)
-                    firstName = nameObj.optString("givenName", "")
-                    lastName = nameObj.optString("familyName", "")
-                    middleName = nameObj.optString("middleName", "")
-                }
-
                 // 2. Phone parsing
                 var phone = ""
                 val phoneNumbers = conn.optJSONArray("phoneNumbers")
@@ -231,7 +216,45 @@ object GoogleContactsSyncManager {
                     phone = phoneNumbers.getJSONObject(0).optString("value", "")
                 }
 
-                // 3. Birthday parsing
+                // 5. Email parsing
+                var email = ""
+                val emailAddresses = conn.optJSONArray("emailAddresses")
+                if (emailAddresses != null && emailAddresses.length() > 0) {
+                    email = emailAddresses.getJSONObject(0).optString("value", "")
+                }
+
+                // 1. Name parsing with display name fallback
+                var firstName = ""
+                var lastName = ""
+                var middleName = ""
+                val names = conn.optJSONArray("names")
+                if (names != null && names.length() > 0) {
+                    val nameObj = names.getJSONObject(0)
+                    firstName = nameObj.optString("givenName", "").trim()
+                    lastName = nameObj.optString("familyName", "").trim()
+                    middleName = nameObj.optString("middleName", "").trim()
+                    
+                    if (firstName.isEmpty() && lastName.isEmpty()) {
+                        val displayName = nameObj.optString("displayName", "").trim()
+                        if (displayName.isNotEmpty()) {
+                            val parts = displayName.split(" ", limit = 2)
+                            firstName = parts.first()
+                            lastName = parts.getOrNull(1) ?: ""
+                        }
+                    }
+                }
+
+                if (firstName.isEmpty() && lastName.isEmpty()) {
+                    if (phone.isNotEmpty()) {
+                        firstName = phone
+                    } else if (email.isNotEmpty()) {
+                        firstName = email.substringBefore("@")
+                    } else {
+                        firstName = "Unnamed Google Contact"
+                    }
+                }
+
+                // 3. Birthday parsing with text fallback
                 var dobString = ""
                 val birthdays = conn.optJSONArray("birthdays")
                 if (birthdays != null && birthdays.length() > 0) {
@@ -246,24 +269,19 @@ object GoogleContactsSyncManager {
                         } else if (m > 0 && d > 0) {
                             dobString = String.format(Locale.US, "%02d-%02d", m, d)
                         }
+                    } else {
+                        val text = bdayObj.optString("text", "").trim()
+                        if (text.isNotEmpty()) {
+                            dobString = text
+                        }
                     }
                 }
 
-                // 4. Photo parsing
+                // 4. Photo parsing (always extract the URL if present)
                 var photoUrl: String? = null
                 val photos = conn.optJSONArray("photos")
                 if (photos != null && photos.length() > 0) {
-                    val photoObj = photos.getJSONObject(0)
-                    if (!photoObj.optBoolean("default", false)) {
-                        photoUrl = photoObj.optString("url")
-                    }
-                }
-
-                // 5. Email parsing
-                var email = ""
-                val emailAddresses = conn.optJSONArray("emailAddresses")
-                if (emailAddresses != null && emailAddresses.length() > 0) {
-                    email = emailAddresses.getJSONObject(0).optString("value", "")
+                    photoUrl = photos.getJSONObject(0).optString("url")
                 }
 
                 // 6. Address parsing
@@ -280,29 +298,41 @@ object GoogleContactsSyncManager {
                     jobTitle = organizations.getJSONObject(0).optString("title", "")
                 }
 
-                // 8. Anniversary parsing
+                // 8. Anniversary and other dates parsing
                 var anniversaryString = ""
+                val additionalDatesList = mutableListOf<String>()
                 val events = conn.optJSONArray("events")
                 if (events != null) {
                     for (j in 0 until events.length()) {
                         val eventObj = events.getJSONObject(j)
                         val type = eventObj.optString("type", "")
-                        if (type == "anniversary") {
-                            val dateObj = eventObj.optJSONObject("date")
-                            if (dateObj != null) {
-                                val y = dateObj.optInt("year", 0)
-                                val m = dateObj.optInt("month", 0)
-                                val d = dateObj.optInt("day", 0)
-                                if (y > 0 && m > 0 && d > 0) {
-                                    anniversaryString = String.format(Locale.US, "%04d-%02d-%02d", y, m, d)
-                                } else if (m > 0 && d > 0) {
-                                    anniversaryString = String.format(Locale.US, "%02d-%02d", m, d)
-                                }
+                        val formattedType = eventObj.optString("formattedType", type.replaceFirstChar { it.uppercase() })
+                        val dateObj = eventObj.optJSONObject("date")
+                        var dateStr = ""
+                        if (dateObj != null) {
+                            val y = dateObj.optInt("year", 0)
+                            val m = dateObj.optInt("month", 0)
+                            val d = dateObj.optInt("day", 0)
+                            if (y > 0 && m > 0 && d > 0) {
+                                dateStr = String.format(Locale.US, "%04d-%02d-%02d", y, m, d)
+                            } else if (m > 0 && d > 0) {
+                                dateStr = String.format(Locale.US, "%02d-%02d", m, d)
                             }
-                            break
+                        } else {
+                            dateStr = eventObj.optString("text", "").trim()
+                        }
+
+                        if (dateStr.isNotEmpty()) {
+                            if (type == "anniversary") {
+                                anniversaryString = dateStr
+                            } else {
+                                val label = if (formattedType.isNotEmpty()) formattedType else "Event"
+                                additionalDatesList.add("$label:$dateStr")
+                            }
                         }
                     }
                 }
+                val additionalDatesJson = additionalDatesList.joinToString(";")
 
                 if (resourceName.isNotEmpty()) {
                     list.add(
@@ -318,7 +348,8 @@ object GoogleContactsSyncManager {
                             email = email,
                             address = address,
                             jobTitle = jobTitle,
-                            anniversaryString = anniversaryString
+                            anniversaryString = anniversaryString,
+                            additionalDatesJson = additionalDatesJson
                         )
                     )
                 }
@@ -434,46 +465,6 @@ object GoogleContactsSyncManager {
         }
         payload.put("names", namesArray)
 
-        if (contact.phone.isNotEmpty()) {
-            val phoneArray = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("value", contact.phone)
-                    put("type", "mobile")
-                })
-            }
-            payload.put("phoneNumbers", phoneArray)
-        }
-
-        if (contact.email.isNotEmpty()) {
-            val emailArray = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("value", contact.email)
-                    put("type", "home")
-                })
-            }
-            payload.put("emailAddresses", emailArray)
-        }
-
-        if (contact.address.isNotEmpty()) {
-            val addressesArray = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("formattedValue", contact.address)
-                    put("type", "home")
-                })
-            }
-            payload.put("addresses", addressesArray)
-        }
-
-        if (contact.jobTitle.isNotEmpty()) {
-            val orgsArray = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("title", contact.jobTitle)
-                    put("type", "work")
-                })
-            }
-            payload.put("organizations", orgsArray)
-        }
-
         if (contact.dobString.isNotEmpty()) {
             val dobStr = contact.dobString
             val parts = dobStr.split("-")
@@ -496,6 +487,7 @@ object GoogleContactsSyncManager {
             }
         }
 
+        val eventsArray = JSONArray()
         if (contact.anniversaryString.isNotEmpty()) {
             val annStr = contact.anniversaryString
             val parts = annStr.split("-")
@@ -509,14 +501,42 @@ object GoogleContactsSyncManager {
                 dateObj.put("day", parts[1].toIntOrNull() ?: 0)
             }
             if (dateObj.length() > 0) {
-                val eventsArray = JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("type", "anniversary")
-                        put("date", dateObj)
-                    })
-                }
-                payload.put("events", eventsArray)
+                eventsArray.put(JSONObject().apply {
+                    put("type", "anniversary")
+                    put("date", dateObj)
+                })
             }
+        }
+
+        if (contact.additionalDatesJson.isNotEmpty()) {
+            contact.additionalDatesJson.split(";").forEach { pair ->
+                val parts = pair.split(":")
+                if (parts.size == 2) {
+                    val label = parts[0]
+                    val dateVal = parts[1]
+                    val dateParts = dateVal.split("-")
+                    val dateObj = JSONObject()
+                    if (dateParts.size == 3) {
+                        dateObj.put("year", dateParts[0].toIntOrNull() ?: 0)
+                        dateObj.put("month", dateParts[1].toIntOrNull() ?: 0)
+                        dateObj.put("day", dateParts[2].toIntOrNull() ?: 0)
+                    } else if (dateParts.size == 2) {
+                        dateObj.put("month", dateParts[0].toIntOrNull() ?: 0)
+                        dateObj.put("day", dateParts[1].toIntOrNull() ?: 0)
+                    }
+                    if (dateObj.length() > 0) {
+                        eventsArray.put(JSONObject().apply {
+                            put("type", "other")
+                            put("formattedType", label)
+                            put("date", dateObj)
+                        })
+                    }
+                }
+            }
+        }
+
+        if (eventsArray.length() > 0) {
+            payload.put("events", eventsArray)
         }
 
         return payload

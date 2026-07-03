@@ -168,9 +168,21 @@ object GoogleTasksSyncManager {
                         listCategory = "Google Tasks",
                         dueDateString = ""
                     )
-                    taskDao.insertTask(newLocal)
+                    val insertedId = taskDao.insertTask(newLocal)
                     importedCount++
                     matchedGoogleIds.add(gTask.id)
+
+                    // Update Google Task's notes with the newly inserted AppTaskId so we can track deletion
+                    try {
+                        val notesWithId = if (cleanNotes.isEmpty()) {
+                            "[AppTaskId: $insertedId]"
+                        } else {
+                            "$cleanNotes\n\n[AppTaskId: $insertedId]"
+                        }
+                        updateGoogleTask(token, gTask.id, gTask.title, notesWithId, gTask.status)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to update Google Task notes with AppTaskId: ${e.message}", e)
+                    }
                 }
             }
 

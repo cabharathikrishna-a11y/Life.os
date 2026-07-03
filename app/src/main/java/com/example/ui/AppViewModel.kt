@@ -5833,7 +5833,7 @@ class AppViewModel(application: Application, private val repository: LocalReposi
 
     // Helper Date utilities
     fun getCurrentDateString(): String {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
         return sdf.format(java.util.Date())
     }
 

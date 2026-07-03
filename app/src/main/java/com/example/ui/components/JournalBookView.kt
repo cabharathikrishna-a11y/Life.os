@@ -178,7 +178,7 @@ fun JournalBookView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
         val entryId = activeEditingEntryId ?: return@LaunchedEffect
         delay(550) // Debounce frequency
         val parsedTimestamp = try {
-            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("$editingDate $editingTime")?.time ?: System.currentTimeMillis()
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).parse("$editingDate $editingTime")?.time ?: System.currentTimeMillis()
         } catch (e: Exception) {
             System.currentTimeMillis()
         }
@@ -725,7 +725,7 @@ fun JournalBookView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                         // Large Plus icon triggering inserting new draft
                         IconButton(
                             onClick = {
-                                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                                 val sdfTime = SimpleDateFormat("HH:mm", Locale.getDefault())
                                 val nowStrDate = sdfDate.format(Date())
                                 val nowStrTime = sdfTime.format(Date())
@@ -871,10 +871,10 @@ fun JournalBookView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                                     ) {
                                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                                             val dateParts = try {
-                                                                val inputSdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                                                val inputSdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                                                                 val d = inputSdf.parse(entry.dateString)
                                                                 val outMonth = SimpleDateFormat("MMM", Locale.getDefault()).format(d)
-                                                                val outDay = SimpleDateFormat("dd", Locale.getDefault()).format(d)
+                                                                val outDay = SimpleDateFormat("dd", Locale.US).format(d)
                                                                 Pair(outMonth.uppercase(), outDay)
                                                             } catch (e: Exception) {
                                                                 Pair("MEM", "??")
@@ -1027,7 +1027,7 @@ fun JournalBookView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                         items(daysInMonth.size) { index ->
                                             val day = daysInMonth[index]
                                             val formattedDay = String.format("%02d", day)
-                                            val currentMonthYear = SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())
+                                            val currentMonthYear = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
                                             val targetDateString = "$currentMonthYear-$formattedDay"
 
                                             val matchEntriesForDay = entries.filter { it.dateString == targetDateString }
@@ -1118,7 +1118,7 @@ fun JournalBookView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                         modifier = Modifier.padding(bottom = 12.dp)
                                     )
 
-                                    val currentDayMonth = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date())
+                                    val currentDayMonth = SimpleDateFormat("MM-dd", Locale.US).format(Date())
                                     val matchedAnniversaryEntries = entries.filter { it.dateString.endsWith(currentDayMonth) }
 
                                     if (matchedAnniversaryEntries.isEmpty()) {

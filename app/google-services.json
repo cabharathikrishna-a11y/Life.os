@@ -10,7 +10,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:217874309865:android:8715a89b3fe43284cf0678",
         "android_client_info": {
-          "package_name": "com.lifeos.com"
+          "package_name": "com.aistudio.lifeos.gxpqtr"
         }
       },
       "oauth_client": [
@@ -18,7 +18,7 @@
           "client_id": "217874309865-7log2te9kui3ha2u8r3f95khqbmg1idj.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.lifeos.com",
+            "package_name": "com.aistudio.lifeos.gxpqtr",
             "certificate_hash": "81dcdfb1b7ab6c3ab19f023519f555c99dab45a9"
           }
         },

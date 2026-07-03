@@ -13,7 +13,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.lifeos.com"
+    applicationId = "com.aistudio.lifeos.gxpqtr"
     minSdk = 24
     targetSdk = 36
     val customCode = project.findProperty("customVersionCode")?.toString()?.toIntOrNull()
@@ -29,11 +29,13 @@ android {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       val keystoreFile = file(keystorePath)
-      if (keystoreFile.exists()) {
+      val storePwd = System.getenv("STORE_PASSWORD")
+      val keyPwd = System.getenv("KEY_PASSWORD")
+      if (keystoreFile.exists() && !storePwd.isNullOrEmpty() && !keyPwd.isNullOrEmpty()) {
         storeFile = keystoreFile
-        storePassword = System.getenv("STORE_PASSWORD")
+        storePassword = storePwd
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD")
+        keyPassword = keyPwd
       } else {
         val debugKeystore = file("${rootDir}/debug.keystore")
         storeFile = debugKeystore

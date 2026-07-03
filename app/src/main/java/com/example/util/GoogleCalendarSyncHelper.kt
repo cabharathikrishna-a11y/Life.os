@@ -194,10 +194,33 @@ object GoogleCalendarSyncHelper {
 
                     val eventDateStr = sdfDate.format(Date(dtStart))
 
+                    // Extract AppTaskId if exists in description to check if local task was deleted
+                    val appTaskIdRegex = Regex("""\[AppTaskId:\s*(\d+)\]""")
+                    val appTaskIdMatch = appTaskIdRegex.find(description)
+                    val appTaskId = appTaskIdMatch?.groupValues?.get(1)?.toIntOrNull()
+
+                    if (appTaskId != null) {
+                        val localExists = localTasks.any { it.id == appTaskId }
+                        if (!localExists) {
+                            // Local task was deleted, so delete corresponding Google Calendar Event
+                            try {
+                                resolver.delete(
+                                    ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                                    null,
+                                    null
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed deleting GCal Event $eventId for deleted local task $appTaskId: ${e.message}", e)
+                            }
+                            continue
+                        }
+                    }
+
                     // Check if we already have this synced locally
                     val alreadySynced = localTasks.any { task ->
                         task.description.contains("[GCalEventId: $eventId]") ||
-                        (task.title.trim().equals(title.trim(), ignoreCase = true) && task.dueDateString == eventDateStr)
+                        (task.title.trim().equals(title.trim(), ignoreCase = true) && task.dueDateString == eventDateStr) ||
+                        (appTaskId != null && task.id == appTaskId)
                     }
 
                     if (!alreadySynced && !description.contains("[AppTaskId:")) {
@@ -216,8 +239,28 @@ object GoogleCalendarSyncHelper {
                             "$description\n[Time: $timeStr] [Duration: ${estMinutes}m]\n\n[GCalEventId: $eventId]"
                         }
 
-                        onImportTask(title, cleanDesc, estMinutes, eventDateStr)
+                        val newTaskId = onImportTask(title, cleanDesc, estMinutes, eventDateStr)
                         importedCount++
+
+                        // Update Google Calendar event description with the newly created local AppTaskId
+                        try {
+                            val updatedDescription = if (description.isEmpty()) {
+                                "[AppTaskId: $newTaskId]"
+                            } else {
+                                "$description\n\n[AppTaskId: $newTaskId]"
+                            }
+                            val updateValues = ContentValues().apply {
+                                put(CalendarContract.Events.DESCRIPTION, updatedDescription)
+                            }
+                            resolver.update(
+                                ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                                updateValues,
+                                null,
+                                null
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed updating Google Calendar event $eventId with AppTaskId: ${e.message}", e)
+                        }
                     }
                 }
             }
@@ -228,65 +271,122 @@ object GoogleCalendarSyncHelper {
             return "Sync failed: ${e.message}"
         }
 
-        // 2. EXPORT TO GOOGLE CALENDAR
+        // 2. EXPORT AND UPDATE TO GOOGLE CALENDAR
         for (task in localTasks) {
-            // Check if task is scheduled for a date, and is not already synced
-            if (task.dueDateString.isNotEmpty() && !task.description.contains("[GCalEventId:")) {
-                try {
-                    val dateParts = task.dueDateString.split("-")
-                    if (dateParts.size == 3) {
-                        val year = dateParts[0].toIntOrNull() ?: continue
-                        val month = (dateParts[1].toIntOrNull() ?: continue) - 1
-                        val day = dateParts[2].toIntOrNull() ?: continue
+            if (task.dueDateString.isNotEmpty()) {
+                if (!task.description.contains("[GCalEventId:")) {
+                    // Export new event
+                    try {
+                        val dateParts = task.dueDateString.split("-")
+                        if (dateParts.size == 3) {
+                            val year = dateParts[0].toIntOrNull() ?: continue
+                            val month = (dateParts[1].toIntOrNull() ?: continue) - 1
+                            val day = dateParts[2].toIntOrNull() ?: continue
 
-                        // Try parsing [Time: hh:mm AM/PM] or standard time from task description
-                        var startHour = 9
-                        var startMinute = 0
-                        val parsedTime = parseTaskTime(task.description)
-                        if (parsedTime != null) {
-                            startHour = parsedTime.first
-                            startMinute = parsedTime.second
-                        }
-
-                        val startCal = Calendar.getInstance().apply {
-                            set(Calendar.YEAR, year)
-                            set(Calendar.MONTH, month)
-                            set(Calendar.DAY_OF_MONTH, day)
-                            set(Calendar.HOUR_OF_DAY, startHour)
-                            set(Calendar.MINUTE, startMinute)
-                            set(Calendar.SECOND, 0)
-                            set(Calendar.MILLISECOND, 0)
-                        }
-
-                        val durationMin = task.estimatedMinutes.coerceAtLeast(15)
-                        val endCal = Calendar.getInstance().apply {
-                            timeInMillis = startCal.timeInMillis + (durationMin * 60 * 1000L)
-                        }
-
-                        val values = ContentValues().apply {
-                            put(CalendarContract.Events.CALENDAR_ID, calendarId)
-                            put(CalendarContract.Events.TITLE, task.title)
-                            put(CalendarContract.Events.DESCRIPTION, "${task.description}\n\n[AppTaskId: ${task.id}]")
-                            put(CalendarContract.Events.DTSTART, startCal.timeInMillis)
-                            put(CalendarContract.Events.DTEND, endCal.timeInMillis)
-                            put(CalendarContract.Events.EVENT_TIMEZONE, timeZone)
-                        }
-
-                        val uri: Uri? = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
-                        if (uri != null) {
-                            val newEventId = ContentUris.parseId(uri)
-                            // Update our local task description to reflect GCal event id
-                            val updatedDesc = if (task.description.isEmpty()) {
-                                "[GCalEventId: $newEventId]"
-                            } else {
-                                "${task.description}\n\n[GCalEventId: $newEventId]"
+                            // Try parsing [Time: hh:mm AM/PM] or standard time from task description
+                            var startHour = 9
+                            var startMinute = 0
+                            val parsedTime = parseTaskTime(task.description)
+                            if (parsedTime != null) {
+                                startHour = parsedTime.first
+                                startMinute = parsedTime.second
                             }
-                            onUpdateTaskDescription(task, updatedDesc)
-                            exportedCount++
+
+                            val startCal = Calendar.getInstance().apply {
+                                set(Calendar.YEAR, year)
+                                set(Calendar.MONTH, month)
+                                set(Calendar.DAY_OF_MONTH, day)
+                                set(Calendar.HOUR_OF_DAY, startHour)
+                                set(Calendar.MINUTE, startMinute)
+                                set(Calendar.SECOND, 0)
+                                set(Calendar.MILLISECOND, 0)
+                            }
+
+                            val durationMin = parseTaskDuration(task.description).coerceAtLeast(15)
+                            val endCal = Calendar.getInstance().apply {
+                                timeInMillis = startCal.timeInMillis + (durationMin * 60 * 1000L)
+                            }
+
+                            val values = ContentValues().apply {
+                                put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                                put(CalendarContract.Events.TITLE, task.title)
+                                put(CalendarContract.Events.DESCRIPTION, "${task.description}\n\n[AppTaskId: ${task.id}]")
+                                put(CalendarContract.Events.DTSTART, startCal.timeInMillis)
+                                put(CalendarContract.Events.DTEND, endCal.timeInMillis)
+                                put(CalendarContract.Events.EVENT_TIMEZONE, timeZone)
+                            }
+
+                            val uri: Uri? = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                            if (uri != null) {
+                                val newEventId = ContentUris.parseId(uri)
+                                // Update our local task description to reflect GCal event id
+                                val updatedDesc = if (task.description.isEmpty()) {
+                                    "[GCalEventId: $newEventId]"
+                                } else {
+                                    "${task.description}\n\n[GCalEventId: $newEventId]"
+                                }
+                                onUpdateTaskDescription(task, updatedDesc)
+                                exportedCount++
+                            }
                         }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed exporting task '${task.title}': ${e.message}", e)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed exporting task '${task.title}': ${e.message}", e)
+                } else {
+                    // Update existing event to sync changes (e.g., end time/duration changes)
+                    try {
+                        val idRegex = Regex("""\[GCalEventId:\s*(\d+)\]""")
+                        val match = idRegex.find(task.description)
+                        val eventId = match?.groupValues?.get(1)?.toLongOrNull()
+                        if (eventId != null) {
+                            val dateParts = task.dueDateString.split("-")
+                            if (dateParts.size == 3) {
+                                val year = dateParts[0].toIntOrNull() ?: continue
+                                val month = (dateParts[1].toIntOrNull() ?: continue) - 1
+                                val day = dateParts[2].toIntOrNull() ?: continue
+
+                                var startHour = 9
+                                var startMinute = 0
+                                val parsedTime = parseTaskTime(task.description)
+                                if (parsedTime != null) {
+                                    startHour = parsedTime.first
+                                    startMinute = parsedTime.second
+                                }
+
+                                val startCal = Calendar.getInstance().apply {
+                                    set(Calendar.YEAR, year)
+                                    set(Calendar.MONTH, month)
+                                    set(Calendar.DAY_OF_MONTH, day)
+                                    set(Calendar.HOUR_OF_DAY, startHour)
+                                    set(Calendar.MINUTE, startMinute)
+                                    set(Calendar.SECOND, 0)
+                                    set(Calendar.MILLISECOND, 0)
+                                }
+
+                                val durationMin = parseTaskDuration(task.description).coerceAtLeast(15)
+                                val endCal = Calendar.getInstance().apply {
+                                    timeInMillis = startCal.timeInMillis + (durationMin * 60 * 1000L)
+                                }
+
+                                val values = ContentValues().apply {
+                                    put(CalendarContract.Events.TITLE, task.title)
+                                    put(CalendarContract.Events.DESCRIPTION, "${task.description}\n\n[AppTaskId: ${task.id}]")
+                                    put(CalendarContract.Events.DTSTART, startCal.timeInMillis)
+                                    put(CalendarContract.Events.DTEND, endCal.timeInMillis)
+                                    put(CalendarContract.Events.EVENT_TIMEZONE, timeZone)
+                                }
+
+                                resolver.update(
+                                    ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                                    values,
+                                    null,
+                                    null
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed updating task on GCal '${task.title}': ${e.message}", e)
+                    }
                 }
             }
         }
@@ -318,5 +418,34 @@ object GoogleCalendarSyncHelper {
             return Pair(hour, minute)
         }
         return null
+    }
+
+    private fun parseTaskDuration(description: String): Int {
+        val regex = Regex("""\[Duration:\s*([^\]]+)\]""", RegexOption.IGNORE_CASE)
+        val match = regex.find(description)
+        if (match != null) {
+            val durationStr = match.groupValues[1].trim().lowercase(Locale.US)
+            
+            // Check for hour/hours/hr/hrs/h
+            if (durationStr.contains("hour") || durationStr.contains("hr") || durationStr.contains("h")) {
+                // Find the decimal number or integer before/in the unit
+                val numRegex = Regex("""(\d+\.?\d*)""")
+                val numMatch = numRegex.find(durationStr)
+                if (numMatch != null) {
+                    val numFloat = numMatch.groupValues[1].toFloatOrNull()
+                    if (numFloat != null && numFloat > 0f) {
+                        return (numFloat * 60).toInt()
+                    }
+                }
+            }
+            
+            // Otherwise, try to extract minutes
+            val digits = durationStr.filter { it.isDigit() }
+            val durationInt = digits.toIntOrNull()
+            if (durationInt != null && durationInt > 0) {
+                return durationInt
+            }
+        }
+        return 15
     }
 }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -120,10 +121,25 @@ fun parseTaskTime(description: String): Pair<Int, Int>? {
 }
 
 fun parseTaskDuration(description: String): Int {
-    val regex = Regex("""\[Duration:\s*([^\]]+)\]""")
+    val regex = Regex("""\[Duration:\s*([^\]]+)\]""", RegexOption.IGNORE_CASE)
     val match = regex.find(description)
     if (match != null) {
-        val durationStr = match.groupValues[1].trim()
+        val durationStr = match.groupValues[1].trim().lowercase(Locale.US)
+        
+        // Check for hour/hours/hr/hrs/h
+        if (durationStr.contains("hour") || durationStr.contains("hr") || durationStr.contains("h")) {
+            // Find the decimal number or integer before/in the unit
+            val numRegex = Regex("""(\d+\.?\d*)""")
+            val numMatch = numRegex.find(durationStr)
+            if (numMatch != null) {
+                val numFloat = numMatch.groupValues[1].toFloatOrNull()
+                if (numFloat != null && numFloat > 0f) {
+                    return (numFloat * 60).toInt()
+                }
+            }
+        }
+        
+        // Otherwise, try to extract minutes
         val digits = durationStr.filter { it.isDigit() }
         val durationInt = digits.toIntOrNull()
         if (durationInt != null && durationInt > 0) {
@@ -1031,149 +1047,295 @@ fun CalendarView(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                                     val lateHours = if (showLateHours) ((sleepHour + 1)..23).toList() else emptyList()
                                     val hoursToRender = earlyHours + coreHours + lateHours
 
-                                    hoursToRender.forEach { hrInt ->
-                                        val hrStr = String.format(Locale.US, "%02d:00", hrInt)
-                                        
-                                        // Find tasks specifically scheduled or pre-assigned to this hour block
-                                        val tasksInThisHour = dayTasks.filter { task ->
-                                            val taskHour = getTaskHourPrefix(task.description)
-                                            taskHour == hrStr
+                                    val hourHeight = 64.dp
+                                    val totalGridHeight = hourHeight * hoursToRender.size
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(totalGridHeight)
+                                    ) {
+                                        // 1. Column of Background Hourly Rows (keeps clickability and time labels!)
+                                        Column(modifier = Modifier.fillMaxSize()) {
+                                            hoursToRender.forEach { hrInt ->
+                                                val hrStr = String.format(Locale.US, "%02d:00", hrInt)
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(hourHeight)
+                                                        .clickable {
+                                                            viewModel.triggerTaskCreationRedirect(activeDateStr, hrStr, "Inbox")
+                                                        },
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    // Time Label on Left
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(64.dp)
+                                                            .fillMaxHeight()
+                                                            .padding(end = 8.dp, top = 4.dp),
+                                                        contentAlignment = Alignment.TopEnd
+                                                    ) {
+                                                        Text(
+                                                            text = if (hrInt == 0) tzOffset else hrStr,
+                                                            color = Color.Gray,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = if (hrInt == 0) FontWeight.Bold else FontWeight.Medium
+                                                        )
+                                                    }
+
+                                                    // Timeline track background on Right
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .fillMaxHeight()
+                                                    ) {
+                                                        Divider(
+                                                            color = Color.Gray.copy(alpha = 0.15f),
+                                                            thickness = 1.dp,
+                                                            modifier = Modifier.align(Alignment.TopStart)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
 
-                                        // Hourly row block
-                                        Row(
+                                        // 2. Overlay of Scheduled Task Cards drawn with absolute offsets and heights based on duration
+                                        BoxWithConstraints(
                                             modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(64.dp)
-                                                .clickable {
-                                                    viewModel.triggerTaskCreationRedirect(activeDateStr, hrStr, "Inbox")
-                                                },
-                                            verticalAlignment = Alignment.Top
+                                                .fillMaxSize()
+                                                .padding(start = 64.dp)
                                         ) {
-                                            // Time Label on Left
-                                            Box(
-                                                modifier = Modifier
-                                                    .width(64.dp)
-                                                    .fillMaxHeight()
-                                                    .padding(end = 8.dp, top = 4.dp),
-                                                contentAlignment = Alignment.TopEnd
-                                            ) {
-                                                Text(
-                                                    text = if (hrInt == 0) tzOffset else hrStr,
-                                                    color = Color.Gray,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = if (hrInt == 0) FontWeight.Bold else FontWeight.Medium
-                                                )
+                                            val firstRenderedHour = hoursToRender.firstOrNull() ?: 0
+
+                                            var draggingTaskId by remember { mutableStateOf<Int?>(null) }
+                                            var dragOffsetPx by remember { mutableStateOf(0f) }
+
+                                            // Extract and parse valid timed tasks
+                                            val activeDateTasksWithTimes = dayTasks.mapNotNull { task ->
+                                                val timeParts = parseTaskTime(task.description)
+                                                if (timeParts != null) {
+                                                    val (startHour, startMinute) = timeParts
+                                                    if (startHour in hoursToRender) {
+                                                        val durationMins = parseTaskDuration(task.description)
+                                                        val startMinutes = startHour * 60 + startMinute
+                                                        val endMinutes = startMinutes + durationMins
+                                                        Triple(task, startMinutes, endMinutes)
+                                                    } else null
+                                                } else null
+                                            }.sortedBy { it.second }
+
+                                            // Assign tasks to horizontal columns to handle overlaps gracefully
+                                            val columns = mutableListOf<MutableList<Triple<Task, Int, Int>>>()
+                                            val taskToColumn = mutableMapOf<Task, Int>()
+
+                                            activeDateTasksWithTimes.forEach { triple ->
+                                                val (task, start, end) = triple
+                                                var placed = false
+                                                for (colIdx in columns.indices) {
+                                                    val colTasks = columns[colIdx]
+                                                    val hasOverlap = colTasks.any { (_, s, e) ->
+                                                        maxOf(start, s) < minOf(end, e)
+                                                    }
+                                                    if (!hasOverlap) {
+                                                        colTasks.add(triple)
+                                                        taskToColumn[task] = colIdx
+                                                        placed = true
+                                                        break
+                                                    }
+                                                }
+                                                if (!placed) {
+                                                    columns.add(mutableListOf(triple))
+                                                    taskToColumn[task] = columns.size - 1
+                                                }
                                             }
 
-                                            // Timeline track on Right
-                                            Box(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .fillMaxHeight()
-                                            ) {
-                                                // Horizontal Grid line
-                                                Divider(
-                                                    color = Color.Gray.copy(alpha = 0.15f),
-                                                    thickness = 1.dp,
-                                                    modifier = Modifier.align(Alignment.TopStart)
-                                                )
+                                            // Render each card
+                                            activeDateTasksWithTimes.forEach { triple ->
+                                                val (task, start, end) = triple
+                                                val startHour = start / 60
+                                                val startMinute = start % 60
+                                                val durationMins = end - start
 
-                                                // Scheduled tasks list in hour
-                                                if (tasksInThisHour.isNotEmpty()) {
+                                                val colIdx = taskToColumn[task] ?: 0
+                                                val overlappingTasks = activeDateTasksWithTimes.filter { (_, s, e) ->
+                                                    maxOf(start, s) < minOf(end, e)
+                                                }
+                                                val maxColAmongOverlaps = overlappingTasks.map { taskToColumn[it.first] ?: 0 }.maxOrNull() ?: 0
+                                                val numSlices = maxColAmongOverlaps + 1
+
+                                                val trackWidth = maxWidth - 24.dp
+                                                val cardWidth = trackWidth / numSlices
+                                                val leftOffset = 8.dp + cardWidth * colIdx
+
+                                                val relativeStartMinutes = (startHour - firstRenderedHour) * 60 + startMinute
+                                                val topOffsetDp = (relativeStartMinutes / 60f) * hourHeight.value
+                                                val heightDp = (durationMins / 60f) * hourHeight.value
+
+                                                val isDragging = task.id == draggingTaskId
+                                                val dragOffsetDp = if (isDragging) {
+                                                    with(androidx.compose.ui.platform.LocalDensity.current) { dragOffsetPx.toDp() }
+                                                } else {
+                                                    0.dp
+                                                }
+                                                val finalTopOffset = topOffsetDp.dp + dragOffsetDp
+
+                                                Card(
+                                                    modifier = Modifier
+                                                        .width(cardWidth)
+                                                        .offset(x = leftOffset, y = finalTopOffset)
+                                                        .height(heightDp.dp)
+                                                        .shadow(
+                                                            elevation = if (isDragging) 8.dp else 0.dp,
+                                                            shape = RoundedCornerShape(8.dp)
+                                                        )
+                                                        .pointerInput(task.id) {
+                                                            detectDragGesturesAfterLongPress(
+                                                                onDragStart = {
+                                                                    draggingTaskId = task.id
+                                                                    dragOffsetPx = 0f
+                                                                },
+                                                                onDrag = { change, dragAmount ->
+                                                                    change.consume()
+                                                                    dragOffsetPx += dragAmount.y
+                                                                },
+                                                                onDragEnd = {
+                                                                    val density = this
+                                                                    val hourHeightPx = density.run { hourHeight.toPx() }
+                                                                    val minutesPerPx = 60f / hourHeightPx
+                                                                    val deltaMinutes = (dragOffsetPx * minutesPerPx).toInt()
+                                                                    val snappedDeltaMinutes = Math.round(deltaMinutes / 5f) * 5
+
+                                                                    val currentStartMinutes = startHour * 60 + startMinute
+                                                                    val newStartMinutes = (currentStartMinutes + snappedDeltaMinutes).coerceIn(0, 23 * 60 + 55)
+                                                                    val newHour = newStartMinutes / 60
+                                                                    val newMinute = newStartMinutes % 60
+
+                                                                    val isAmPm = task.description.contains(Regex("""\[Time:\s*\d{1,2}:\d{2}\s*(AM|PM)\]""", RegexOption.IGNORE_CASE))
+                                                                    val newTimeStr = if (isAmPm) {
+                                                                        val ampm = if (newHour >= 12) "PM" else "AM"
+                                                                        val displayHour = when {
+                                                                            newHour == 0 -> 12
+                                                                            newHour > 12 -> newHour - 12
+                                                                            else -> newHour
+                                                                        }
+                                                                        String.format(Locale.US, "%d:%02d %s", displayHour, newMinute, ampm)
+                                                                    } else {
+                                                                        String.format(Locale.US, "%02d:%02d", newHour, newMinute)
+                                                                    }
+
+                                                                    val timeRegex = Regex("""\[Time:\s*[^\]]+\]""")
+                                                                    var updatedDesc = task.description
+                                                                    if (updatedDesc.contains(timeRegex)) {
+                                                                        updatedDesc = updatedDesc.replace(timeRegex, "[Time: $newTimeStr]")
+                                                                    } else {
+                                                                        updatedDesc = updatedDesc.trim() + "\n[Time: $newTimeStr]"
+                                                                    }
+
+                                                                    viewModel.updateTask(task.copy(description = updatedDesc))
+
+                                                                    draggingTaskId = null
+                                                                    dragOffsetPx = 0f
+                                                                },
+                                                                onDragCancel = {
+                                                                    draggingTaskId = null
+                                                                    dragOffsetPx = 0f
+                                                                }
+                                                            )
+                                                        }
+                                                        .clickable(enabled = !isDragging) {
+                                                            viewModel.navigateTo(com.example.ui.Screen.TASKS)
+                                                         },
+                                                    colors = CardDefaults.cardColors(
+                                                        containerColor = if (isDragging) {
+                                                            Color(0xFF202025)
+                                                        } else if (task.isCompleted) {
+                                                            Color(0xFF141416)
+                                                        } else {
+                                                            SurfaceCard
+                                                        }
+                                                    ),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    border = if (isDragging) {
+                                                        BorderStroke(1.5.dp, WaterBlue)
+                                                    } else if (task.isCompleted) {
+                                                        null
+                                                     } else {
+                                                         BorderStroke(0.5.dp, Color.Gray.copy(alpha = 0.3f))
+                                                     }
+                                                ) {
                                                     Row(
                                                         modifier = Modifier
                                                             .fillMaxSize()
-                                                            .padding(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 4.dp),
-                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                            .padding(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        tasksInThisHour.forEach { th ->
-                                                            Card(
-                                                                modifier = Modifier
-                                                                    .weight(1f)
-                                                                    .fillMaxHeight()
-                                                                    .clickable(enabled = true) {
-                                                                        viewModel.navigateTo(com.example.ui.Screen.TASKS)
-                                                                    },
-                                                                colors = CardDefaults.cardColors(
-                                                                    containerColor = if (th.isCompleted) Color(0xFF141416) else SurfaceCard
-                                                                ),
-                                                                shape = RoundedCornerShape(8.dp),
-                                                                border = if (th.isCompleted) null else BorderStroke(0.5.dp, Color.Gray.copy(alpha = 0.3f))
-                                                            ) {
-                                                                Row(
-                                                                    modifier = Modifier
-                                                                        .fillMaxSize()
-                                                                        .padding(8.dp),
-                                                                    verticalAlignment = Alignment.CenterVertically
-                                                                ) {
-                                                                    Box(
-                                                                        modifier = Modifier
-                                                                            .size(8.dp)
-                                                                            .clip(CircleShape)
-                                                                            .background(
-                                                                                when (th.priority.uppercase()) {
-                                                                                    "HIGH" -> Color(0xFFF44336)
-                                                                                    "LOW" -> Color(0xFF4CAF50)
-                                                                                    else -> WaterBlue
-                                                                                }
-                                                                            )
-                                                                    )
-                                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                                    Column(modifier = Modifier.weight(1f)) {
-                                                                        Text(
-                                                                            text = th.title,
-                                                                            color = if (th.isCompleted) Color.Gray else Color.White,
-                                                                            fontWeight = FontWeight.Bold,
-                                                                            fontSize = 12.sp,
-                                                                            maxLines = 1,
-                                                                            overflow = TextOverflow.Ellipsis,
-                                                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                                                textDecoration = if (th.isCompleted) TextDecoration.LineThrough else null
-                                                                            )
-                                                                        )
-                                                                        if (th.description.isNotEmpty()) {
-                                                                            Text(
-                                                                                text = th.description.replace(Regex("""\[[^\]]+\]"""), "").trim(),
-                                                                                color = Color.Gray,
-                                                                                fontSize = 10.sp,
-                                                                                maxLines = 1,
-                                                                                overflow = TextOverflow.Ellipsis
-                                                                            )
-                                                                        }
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(8.dp)
+                                                                .clip(CircleShape)
+                                                                .background(
+                                                                    when (task.priority.uppercase()) {
+                                                                        "HIGH" -> Color(0xFFF44336)
+                                                                        "LOW" -> Color(0xFF4CAF50)
+                                                                        else -> WaterBlue
                                                                     }
-                                                                }
+                                                                )
+                                                        )
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = task.title,
+                                                                color = if (task.isCompleted) Color.Gray else Color.White,
+                                                                fontWeight = FontWeight.Bold,
+                                                                fontSize = 12.sp,
+                                                                maxLines = if (heightDp >= 50) 2 else 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null
+                                                                )
+                                                            )
+                                                            if (task.description.isNotEmpty() && heightDp >= 40) {
+                                                                Text(
+                                                                    text = task.description.replace(Regex("""\[[^\]]+\]"""), "").trim(),
+                                                                    color = Color.Gray,
+                                                                    fontSize = 10.sp,
+                                                                    maxLines = if (heightDp >= 60) 2 else 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
                                                             }
                                                         }
                                                     }
                                                 }
+                                            }
 
-                                                // Current relative time pointer red line precisely overlayed if today
-                                                if (isToday) {
-                                                    val c = Calendar.getInstance()
-                                                    val nowHr = c.get(Calendar.HOUR_OF_DAY)
-                                                    val nowMin = c.get(Calendar.MINUTE)
-                                                    
-                                                    if (nowHr == hrInt) {
-                                                        val offsetFraction = nowMin / 60f
+                                            // 3. Current relative time pointer red line precisely overlayed if today
+                                            if (isToday) {
+                                                val c = Calendar.getInstance()
+                                                val nowHr = c.get(Calendar.HOUR_OF_DAY)
+                                                val nowMin = c.get(Calendar.MINUTE)
+
+                                                if (nowHr in hoursToRender) {
+                                                    val relativeNowMinutes = (nowHr - firstRenderedHour) * 60 + nowMin
+                                                    val indicatorYOffsetDp = (relativeNowMinutes / 60f) * hourHeight.value
+
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .offset(y = indicatorYOffsetDp.dp)
+                                                    ) {
+                                                        Divider(
+                                                            color = Color(0xFFEA4335),
+                                                            thickness = 1.8.dp,
+                                                            modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart)
+                                                        )
                                                         Box(
                                                             modifier = Modifier
-                                                                .fillMaxWidth()
-                                                                .padding(top = (64 * offsetFraction).dp)
-                                                        ) {
-                                                            Divider(
-                                                                color = Color(0xFFEA4335),
-                                                                thickness = 1.8.dp,
-                                                                modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart)
-                                                            )
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(7.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(Color(0xFFEA4335))
-                                                                    .align(Alignment.CenterStart)
-                                                            )
-                                                        }
+                                                                .size(7.dp)
+                                                                .clip(CircleShape)
+                                                                .background(Color(0xFFEA4335))
+                                                                .align(Alignment.CenterStart)
+                                                        )
                                                     }
                                                 }
                                             }

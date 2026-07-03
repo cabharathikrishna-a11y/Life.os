@@ -67,6 +67,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         try {
+            // Dismiss stale notifications to prevent SystemUI asset loading crashes on app updates/reinstalls
+            try {
+                val notificationManager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                notificationManager.cancelAll()
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to cancel old notifications on startup: ${e.message}")
+            }
+
             // Initialize monotonic StableTime
             com.example.util.StableTime.init()
 
